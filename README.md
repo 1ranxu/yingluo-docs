@@ -508,3 +508,59 @@ yarn add vue-router@4
 ![image-20230916111325663](assets/image-20230916111325663.png)
 
 ![image-20230916111459403](assets/image-20230916111459403.png)
+
+3. 修改通用布局
+
+   ![image-20230916151307992](assets/image-20230916151307992.png)
+
+   编程式路由参考[编程式导航 | Vue Router (vuejs.org)](https://router.vuejs.org/zh/guide/essentials/navigation.html)
+
+### 搜索页
+
+1.选择组件
+
+![image-20230916114642295](assets/image-20230916114642295.png)
+
+![image-20230916114750370](assets/image-20230916114750370.png)
+
+![image-20230916131223513](assets/image-20230916131223513.png)
+
+![image-20230916132158857](assets/image-20230916132158857.png)
+
+2. 引入组件
+
+![image-20230916144112168](assets/image-20230916144112168.png)
+
+3. 编写搜索页
+
+   1. 编写导航栏
+
+      ![image-20230916144328890](assets/image-20230916144328890.png)
+
+      ![image-20230916145103806](assets/image-20230916145103806.png)
+
+      ![image-20230916145403396](assets/image-20230916145403396.png)
+
+   2. 分割已选标签和选择标签
+
+      ![image-20230916145221852](assets/image-20230916145221852.png)
+
+   3. 渲染已选标签
+
+      ![image-20230916150007197](assets/image-20230916150007197.png)
+
+      ![image-20230916150254924](assets/image-20230916150254924.png)
+
+   4. 引入TreeSelect组件
+
+      ![image-20230916150405714](assets/image-20230916150405714.png)
+
+      ![image-20230916150909719](assets/image-20230916150909719.png)
+
+   5. 添加搜素页的路由
+
+      ![image-20230916151107567](assets/image-20230916151107567.png)
+
+   6. 最终效果
+
+      ![image-20230916150959126](assets/image-20230916150959126.png)
