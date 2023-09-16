@@ -2,6 +2,8 @@
 
 简介:帮助大家找到志同道合的伙伴，移动端的H5网页（尽量兼容PC端）
 
+用户可以去用户中心注册，登录用户中心，每个用户可以打上一些标签，伙伴匹配系统根据标签帮家找到志同道合的伙伴
+
 ## 需求分析
 
 1. 用户给自己添加标签；修改标签，系统根据标签对用户进行分类（有哪些标签，如何对标签进行分类）分类比如：学习方向，就业状态，理想城市，工作，大学等
@@ -26,8 +28,8 @@
 ### 前端
 
 1. Vue3框架（提高页面开发效率）
-2. Vant UI组件库（基于Vue的移动端组件库）（它也有基于React的版本Zent）
-3. Vite（打包工具，速度快）
+2. Vant3 UI组件库（基于Vue的移动端组件库）（它也有基于React的版本Zent）
+3. Vite4（打包工具，速度快）
 4. Nginx 单机部署
 
 ### 后端
@@ -48,18 +50,23 @@
 
 1. **前端项目初始化**
 2. **前端主页 + 组件概览**
-
-2. **数据库表设计**
+3. **数据库表设计**
    1. 标签表
    2. 用户表
 4. **后端项目初始化**
-3. **后端开发**
+5. **后端开发**
    1. 使用标签搜索用户
-   2. 组队
-   3. 用户修改
-   4. 推荐
-4. **前端开发**
-   1. 根据标签搜索用户
+   2. 整合Swagger + Knife4j 接口文档
+   3. 存量用户信息导入及同步（爬虫）
+   4. 组队
+   5. 用户修改
+   6. 推荐
+6. **前端开发**
+   1. 整合路由
+   2. 搜索页面-根据标签搜索用户
+   3. 用户信息页
+   4. 用户信息修改页
+
 
 
 
@@ -187,7 +194,7 @@ app.mount('#app')
 
    ![image-20230914153548155](assets/image-20230914153548155.png)
 
-3. 
+3.  
 
 ### 开发
 
@@ -355,6 +362,8 @@ alter table user add COLUMN tags varchar(1024) null comment '标签列表Json'
 
 ## 后端项目初始化
 
+本来想把标签的增删改查等业务放到新项目里，实际分析后，因为标签和用户关联比较强，所以还是把标签的增删改查放到用户中心项目里
+
 1. 把用户中心项目后端代码复制，目录改成partnerMatching-backend，删掉.idea，iml文件；修改pom.xml文件
 
 ![image-20230915095601977](assets/image-20230915095601977.png)
@@ -366,6 +375,13 @@ alter table user add COLUMN tags varchar(1024) null comment '标签列表Json'
 ## 后端开发
 
 ### 使用标签搜索用户
+
+建议通过实际测试来分析哪种查询比较快，数据量大的时候验证效果更明显！
+
+- 如果参数可以分析，根据用户的参数去选择查询方式，比如标签数。标签数少，用SQL查询；标签数多，用内存查询
+
+- 如果参数不可分析，并且数据库连接足够、内存空间足够，可以并发同时查询，谁先返回用谁。
+- 还可以 SQL 查询与内存查询相结合，比如先用 SQL 过滤掉部分 tag
 
 **SQL查询**
 
@@ -381,47 +397,58 @@ alter table user add COLUMN tags varchar(1024) null comment '标签列表Json'
    tags like '%Java%' or  tags like '%C++%' or tags like '%Go%'
    ```
 
-**内存查询**
-
-
-
-建议通过实际测试来分析哪种查询比较快，数据量大的时候验证效果更明显！
-
-- 如果参数可以分析，根据用户的参数去选择查询方式，比如标签数。标签数少，用SQL查询；标签数多，用内存查询
-
-- 如果参数不可分析，并且数据库连接足够、内存空间足够，可以并发同时查询，谁先返回用谁。
-- 还可以 SQL 查询与内存查询相结合，比如先用 SQL 过滤掉部分 tag
-
-
-
-1. 在用户中心的UserServiceImpl中提供queryUsersByTags接口
-
 ```java
-public List<UserDTO> queryUsersByTags(List<String> tagList) {
+/**
+ * 使用标签搜索用户（SQL查询版）
+ *
+ * @param tagList 用户传入的标签
+ * @return
+ */
+@Deprecated
+public List<UserDTO> queryUsersByTagsBySQL(List<String> tagList) {
     //判空
     if (CollectionUtil.isEmpty(tagList)) {
         throw new BusinessException(ErrorCode.PARAMS_ERROR, "标签不能为空");
     }
-    /*//SQL模糊查询
+    //SQL模糊查询
     LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
     for (String tag : tagList) {
-        queryWrapper.like(StringUtils.isNotBlank(tag),User::getTags,tag);
+        queryWrapper.like(StringUtils.isNotBlank(tag), User::getTags, tag);
     }
     List<User> users = userMapper.selectList(queryWrapper);
     //脱敏
-    return users.stream().map(user -> BeanUtil.copyProperties(user, UserDTO.class)).collect(Collectors.toList());*/
-    
+    return users.stream().map(user -> BeanUtil.copyProperties(user, UserDTO.class)).collect(Collectors.toList());
+}
+```
+
+**内存查询**
+
+1. 在用户中心的UserServiceImpl中提供queryUsersByTagsByMemory接口
+
+```java
+/**
+ * 使用标签搜索用户(内存过滤）
+ *
+ * @param tagList 用户传入的标签
+ * @return
+ */
+@Override
+public List<UserDTO> queryUsersByTagsByMemory(List<String> tagList) {
+    //判空
+    if (CollectionUtil.isEmpty(tagList)) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "标签不能为空");
+    }
     //内存查询
     LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
     //查询所有用户
     List<User> users = userMapper.selectList(queryWrapper);
     Gson gson = new Gson();
     return users.stream().filter(user -> {
-        if (StringUtils.isBlank(user.getTags()))
-            return false;
-        //过滤
         Set<String> tempTagSet = gson.fromJson(user.getTags(), new TypeToken<Set<String>>() {
         }.getType());
+        //有些用户的tags字段可能为空，要先判空，否则报控空指针异常
+        tempTagSet = Optional.ofNullable(tempTagSet).orElse(new HashSet<>());
+        //过滤
         for (String tag : tagList) {
             if (!tempTagSet.contains(tag))
                 return false;
@@ -444,3 +471,40 @@ public List<UserDTO> queryUsersByTags(List<String> tagList) {
 ### 用户修改
 
 ### 推荐
+
+
+
+## 前端开发
+
+### 整合路由
+
+Vue-Router 其实就是帮助你根据不同的 url 来展示不同的页面（组件），不用自己写 if / else
+
+路由配置影响整个项目，所以建议单独用 config 目录、单独的配置文件去集中定义和管理。
+
+有些组件库可能自带了和 Vue-Router 的整合，所以尽量先看组件文档、省去自己写的时间。
+
+[安装 | Vue Router (vuejs.org)](https://router.vuejs.org/zh/installation.html)
+
+1.安装Vue Router
+
+```sh
+#如果安装失败，可能是项目正在运行，把项目停掉，删除node_modules目录，再安装
+yarn add vue-router@4
+```
+
+![image-20230916102856564](assets/image-20230916102856564.png)
+
+2. 引入vue-router
+
+[入门 | Vue Router (vuejs.org)](https://router.vuejs.org/zh/guide/)
+
+![image-20230916110556135](assets/image-20230916110556135.png)
+
+![image-20230916110836957](assets/image-20230916110836957.png)
+
+![image-20230916111026425](assets/image-20230916111026425.png)
+
+![image-20230916111325663](assets/image-20230916111325663.png)
+
+![image-20230916111459403](assets/image-20230916111459403.png)
