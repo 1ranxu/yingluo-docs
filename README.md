@@ -52,12 +52,13 @@
 2. **数据库表设计**
    1. 标签表
    2. 用户表
-3. **后端**
-   1. 根据标签搜索用户
+4. **后端项目初始化**
+3. **后端开发**
+   1. 使用标签搜索用户
    2. 组队
    3. 用户修改
    4. 推荐
-4. **前端**
+4. **前端开发**
    1. 根据标签搜索用户
 
 
@@ -78,36 +79,368 @@
 
 ![image-20230912214604415](assets/image-20230912214604415.png)
 
-![image-20230912215308003](assets/image-20230912215308003.png) ![image-20230913133810106](assets/image-20230913133810106.png)
+```
+yarn create vite
+```
+
+![image-20230912215308003](assets/image-20230912215308003.png)
+
+```sh
+#安装依赖
+npm install
+```
+
+![image-20230913133810106](assets/image-20230913133810106.png)
 
 ![image-20230913134340025](assets/image-20230913134340025.png)
 
 ### 整合Vant组件库
 
-1. 整合
-
-![image-20230913135615799](assets/image-20230913135615799.png)
-
-![image-20230913135212721](assets/image-20230913135212721.png)
-
-![image-20230913135727152](assets/image-20230913135727152.png)
-
-![image-20230913135944435](assets/image-20230913135944435.png)
-
-![image-20230913140625849](assets/image-20230913140625849.png)
+1. 安装vant
 
 ![image-20230913141746828](assets/image-20230913141746828.png)
 
-![image-20230913141840871](assets/image-20230913141840871.png)
+```
+npm i vant
+```
 
-2. 引入组件
+2. 安装插件
+
+```sh
+#它可以自动引入组件，并按需引入组件的样式。
+npm i vite-plugin-style-import@1.4.1 -D
+```
+
+3. 让Vite认识Vant-在vite.config,ts中修改代码
+
+```ts
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import styleImport,{ VantResolve } from 'vite-plugin-style-import';
+// https://vitejs.dev/config/
+export default defineConfig({
+  plugins: [vue(),styleImport({
+    resolves:[VantResolve()],
+    libs: [
+      {
+        libraryName: 'vant',
+        esModule: true,
+        resolveStyle: (name) => `../es/${name}/style`
+      }
+    ]
+  }),],
+})
+```
+
+4. 引入组件
 
 ![image-20230913142523914](assets/image-20230913142523914.png)
 
-![image-20230913143056749](assets/image-20230913143056749.png)
+5. 修改main.ts文件
 
-![image-20230913143316942](assets/image-20230913143316942.png)
+```ts
+//不用多引入样式
+import { createApp } from 'vue'
+import App from './App.vue'
+import {Button, NavBar} from "vant";
 
-![image-20230913143356758](assets/image-20230913143356758.png)
+const app=createApp(App)
 
-![image-20230913143433436](assets/image-20230913143433436.png)
+app.mount('#app')
+```
+
+## 前端主页 + 组件概览
+
+**开发页面经验**：
+
+1. 多参考
+2. 从整体到局部
+3. 先明确页面的布局，再写代码
+
+**精简页面**
+
+![image-20230913193149609](assets/image-20230913193149609.png)
+
+![image-20230913193359006](assets/image-20230913193359006.png)
+
+### 页面设计
+
+1. 导航条：展示当前页面名称
+2. 主页搜索框 ==> 搜索页（标签筛选页，通过标签筛选用户）==> 搜索结果页
+3. 内容：
+
+2. Tab栏
+   - 主页（推荐页 + **广告**）
+     - 搜锁框
+     - banner
+     - 推荐信息流
+   - 队伍
+   - 用户页（消息-暂时考虑发邮件）
+
+### 组件概览
+
+1. 导航栏
+
+   ![image-20230913195343599](assets/image-20230913195343599.png)
+
+2. TabBar
+
+   ![image-20230914153548155](assets/image-20230914153548155.png)
+
+3. 
+
+### 开发
+
+#### 通用布局
+
+1. 抽象一个通用的布局（Layout），使得其他页面能够复用布局中的组件/样式，利于维护
+
+![image-20230913195129701](assets/image-20230913195129701.png)
+
+2. 复制导航栏的代码到这个布局中
+
+![image-20230914123843394](assets/image-20230914123843394.png)
+
+3. 在App.vue中添加布局
+
+![image-20230914151646028](assets/image-20230914151646028.png)
+
+4. 在main.ts中引入NavBar,Icon
+
+![image-20230914152329292](assets/image-20230914152329292.png)
+
+5. 对导航栏进行修改
+
+![image-20230914152614404](assets/image-20230914152614404.png)
+
+![image-20230914152636314](assets/image-20230914152636314.png)
+
+6. 引入TabBar
+
+![image-20230914153823356](assets/image-20230914153823356.png)
+
+![image-20230914154945288](assets/image-20230914154945288.png)
+
+![image-20230914163717175](assets/image-20230914163717175.png)
+
+7. 效果
+
+![image-20230914163929186](assets/image-20230914163929186.png)
+
+![image-20230914163956560](assets/image-20230914163956560.png)
+
+## 数据库表设计
+
+### 新增标签表
+
+**标签**：
+
+性别：男，女
+
+方向：Java，C++，Go，前端，后端
+
+目标：考研，春招，秋招，社招，考公，竞赛，转行，跳槽
+
+段位：初级，中级，高级，码神
+
+身份：小学，初中，高中，大一，大二，大三，大四，学生，待就业，已就业，研一，研二，研三
+
+状态：乐观，聒噪，狂热，一般，单身，已婚，有对象
+
+用户自己定义标签：开发者不可能想到所有用户需要的标签，让用户去决定要右哪些标签
+
+**字段**：
+
+id   		   bigint          主键 	
+
+tagName vachar  	 非空标签名（标签具体内容，比如男）（唯一索引）
+
+userId 	 bigint 		上传标签的用户 （用户可以自定义标签，然后上传） （普通索引，根据userId查询已上传的标签）
+
+parentId  bigint 		父标签id (就是标签的抽象，比如性别)
+
+isParent   tinyint   	是否为父标签（0-不是，1-是） 
+
+createTime datetime 创建时间
+
+updateTime datetime 更新时间
+
+isDeleted tinyint		 逻辑删除(0-未删除，1-已删除)
+
+通过父标签id来分组 
+
+```mysql
+DROP TABLE IF EXISTS tag;
+
+create table user_center.tag
+(
+    id         bigint auto_increment comment '(主键) '
+        primary key,
+    tagName    varchar(256)                       null comment '标签名称',
+    userId     bigint                             null comment '用户id',
+    parentId   bigint                             null comment '父标签id',
+    isParent   tinyint                            null comment '0-不是父标签，1-是父标签',
+    createTime datetime default CURRENT_TIMESTAMP not null comment '用户创建时间',
+    updateTime datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '用户更新时间',
+    isDeleted  tinyint  default 0                 not null comment '标签是否已删除',
+    constraint uniIdx_tagName
+        unique (tagName)
+)
+    comment '标签表';
+
+create index Idx_userId
+    on tag (userId);
+```
+
+
+
+### 修改用户表
+
+**根据自己的需求！！！**
+
+1. 直接在用户表补充tags字段，['Java','男'] Json（**采用**）
+
+   优点：查询方便，不用新建关联表，标签是用户的固有属性（除了该系统，其他系统可能也会用到），节省开发成本。可以用缓存，提高用户查询性能
+
+   缺点：用户表多一列
+
+2. 加一个关联表，记录用户和标签的关系（**尽量减少关联查询**）
+
+   优点：查询灵活，可以正查反查
+
+   缺点：查询100个用户的列表时，查完用户表得到用户id，又要根据用户id查关联表获取标签id，又要根据标签id查标签表获取标签，影响扩展和查询性能
+
+**用户表**：
+
+- id  （主键）bigint
+- userAccount 登录账号 varchar
+- username 用户昵称 varchar
+- avatarUrl 用户头像 varchar
+- gender 用户性别 tinyint 0 1
+- userPassword 用户密码 varchar
+- phone 用户电话 varchar
+- email 用户邮箱 varchar
+- userStatus 用户状态 int  0-正常 
+- createTime 用户创建时间 datetime
+- updateTime 用户更新时间 datetime
+- isDeleted 用户是否删除(逻辑删除) tinyint 0 1
+- userRole 用户角色 
+
+```mysql
+DROP TABLE IF EXISTS user;
+
+create table user_center.user
+(
+    id           bigint auto_increment comment '(主键) '
+        primary key,
+    userAccount  varchar(256)                       null comment '登录账号',
+    username     varchar(256)                       null comment '用户昵称',
+    avatarUrl    varchar(1024)                      null comment '用户头像',
+    gender       tinyint                            null comment '用户性别',
+    userPassword varchar(256)                       not null comment '用户密码',
+    phone        varchar(128)                       null comment '用户电话',
+    email        varchar(512)                       null comment '用户邮箱',
+    userStatus   int      default 0                 not null comment '用户状态 0-正常 ',
+    createTime   datetime default CURRENT_TIMESTAMP not null comment '用户创建时间',
+    updateTime   datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '用户更新时间',
+    isDeleted    tinyint  default 0                 not null comment '用户是否删除',
+    userRole     int      default 0                 not null comment '用户角色 0-普通用户 1-管理员',
+    authCode     varchar(512)                       null comment '付费系统编号，用于校验用户'
+    
+)
+    comment '用户表';
+#补充tags字段    
+alter table user add COLUMN tags varchar(1024) null comment '标签列表Json'
+```
+
+## 后端项目初始化
+
+1. 把用户中心项目后端代码复制，目录改成partnerMatching-backend，删掉.idea，iml文件；修改pom.xml文件
+
+![image-20230915095601977](assets/image-20230915095601977.png)
+
+## 用户中心提供用户的查询，操作，注册，登录，鉴权
+
+
+
+## 后端开发
+
+### 使用标签搜索用户
+
+**SQL查询**
+
+1. 允许用户传入多个标签，多个标签在用户的tags字段都存在，用户才能被搜出来 
+
+   ```
+   tags like '%Java%' and  tags like '%C++%' and tags like '%Go%'
+   ```
+
+2. 允许用户传入多个标签，任何标签在用户的tags字段存在，用户就能被搜出来
+
+   ```
+   tags like '%Java%' or  tags like '%C++%' or tags like '%Go%'
+   ```
+
+**内存查询**
+
+
+
+建议通过实际测试来分析哪种查询比较快，数据量大的时候验证效果更明显！
+
+- 如果参数可以分析，根据用户的参数去选择查询方式，比如标签数。标签数少，用SQL查询；标签数多，用内存查询
+
+- 如果参数不可分析，并且数据库连接足够、内存空间足够，可以并发同时查询，谁先返回用谁。
+- 还可以 SQL 查询与内存查询相结合，比如先用 SQL 过滤掉部分 tag
+
+
+
+1. 在用户中心的UserServiceImpl中提供queryUsersByTags接口
+
+```java
+public List<UserDTO> queryUsersByTags(List<String> tagList) {
+    //判空
+    if (CollectionUtil.isEmpty(tagList)) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "标签不能为空");
+    }
+    /*//SQL模糊查询
+    LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+    for (String tag : tagList) {
+        queryWrapper.like(StringUtils.isNotBlank(tag),User::getTags,tag);
+    }
+    List<User> users = userMapper.selectList(queryWrapper);
+    //脱敏
+    return users.stream().map(user -> BeanUtil.copyProperties(user, UserDTO.class)).collect(Collectors.toList());*/
+    
+    //内存查询
+    LambdaQueryWrapper<User> queryWrapper = new LambdaQueryWrapper<>();
+    //查询所有用户
+    List<User> users = userMapper.selectList(queryWrapper);
+    Gson gson = new Gson();
+    return users.stream().filter(user -> {
+        if (StringUtils.isBlank(user.getTags()))
+            return false;
+        //过滤
+        Set<String> tempTagSet = gson.fromJson(user.getTags(), new TypeToken<Set<String>>() {
+        }.getType());
+        for (String tag : tagList) {
+            if (!tempTagSet.contains(tag))
+                return false;
+        }
+        return true;
+    }).map(user -> BeanUtil.copyProperties(user, UserDTO.class)).collect(Collectors.toList());
+}
+```
+
+2. 因为user表加了字段，相应的做些修改
+
+![image-20230915152948531](assets/image-20230915152948531.png)
+
+![image-20230915153041395](assets/image-20230915153041395.png)
+
+![image-20230915153137469](assets/image-20230915153137469.png)
+
+### 组队
+
+### 用户修改
+
+### 推荐
