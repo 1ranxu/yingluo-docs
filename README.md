@@ -58,14 +58,21 @@
    1. 使用标签搜索用户
    2. 整合Swagger + Knife4j 接口文档
    3. 存量用户信息导入及同步（爬虫）
-   4. 组队
-   5. 用户修改
-   6. 推荐
+   4. 标签内容整理
+   5. 组队
+   6. 用户修改
+   7. 推荐
 6. **前端开发**
    1. 整合路由
    2. 搜索页面-根据标签搜索用户
    3. 用户信息页
    4. 用户信息修改页
+7. **前后端联调**
+   1. 搜索页
+   2. 用户信息页
+   3. 用户信息修改页
+
+8. **部分细节优化**
 
 
 
@@ -465,6 +472,142 @@ public List<UserDTO> queryUsersByTagsByMemory(List<String> tagList) {
 ![image-20230915153041395](assets/image-20230915153041395.png)
 
 ![image-20230915153137469](assets/image-20230915153137469.png)
+
+### 整合Swagger + Knife4j 接口文档
+
+1. 什么是接口文档？
+
+   用于描述接口信息，包括：
+
+   - 请求参数
+   - 响应参数
+   - 接口地址
+   - 接口名称
+   - 请求类型
+   - 请求格式
+   - 备注
+
+2. 由谁提供，由谁使用？
+
+   一般是后端或者负责人来提供，后端和前端都可以使用
+
+3. 为什么需要接口文档？
+
+   - 便于参考和查阅，便于**沉淀和维护**，拒绝口口相传
+   - 便于前后端开发对接，是前后端联调的**介质**
+   - 支持在线调试，在线测试， 可以作为工具，提高我们的开发效率
+
+4. 怎么做接口文档？
+
+   - 手写（MarkDown笔记等)
+   - 自动化接口文档生成：（自动根据项目代码生成完整的文档或在线调试的网页）
+     - **Swagger（采用）**，Postman（侧重接口管理）（国外）
+     - apifox，apipost，eolink（国产）
+
+5. 接口文档右哪些技巧？
+
+6. Swagger原理
+
+   1. 引入依赖（Swagger 或 Knife4j：[1.6 快速开始 | knife4j (xiaominfo.com)](https://doc.xiaominfo.com/v2/documentation/get_start.html)）
+
+   2. 自定义Swagger配置类
+
+   3. 定义需要生成接口文档的代码的位置（controller）
+
+   4. 启动项目即可
+
+   5. 可以通过在 controller 方法上添加 @Api、@ApiImplicitParam(name = "name",value = "姓名",required = true)    @ApiOperation(value = "向客人问好") 等注解来自定义生成的接口描述信息
+
+   6. 如果 springboot version >= 2.6，需要添加如下配置：
+
+      ```yaml
+      spring:
+        mvc:
+        	pathmatch:
+            matching-strategy: ANT_PATH_MATCHER
+      ```
+
+   7. 访问http://localhost:8080/api/doc.html
+
+7. 注意：线上环境不要把接口暴露出去！！！
+
+8. 隐藏 可以通过在 SwaggerConfig 配置文件开头加上 `@Profile({"dev", "test"})` 限定配置仅在部分环境开启
+
+**整合**
+
+1. 引入依赖
+
+   ```java
+   <!--swagger-->
+   <dependency>
+       <groupId>com.github.xiaoymin</groupId>
+       <artifactId>knife4j-spring-boot-starter</artifactId>
+       <!--在引用时请在maven中央仓库搜索2.X最新版本号-->
+       <version>2.0.9</version>
+   </dependency>
+   ```
+
+2. 编写配置类
+
+   ```java
+   package com.luoying.config;
+   
+   import org.springframework.context.annotation.Bean;
+   import org.springframework.context.annotation.Configuration;
+   import springfox.documentation.builders.ApiInfoBuilder;
+   import springfox.documentation.builders.PathSelectors;
+   import springfox.documentation.builders.RequestHandlerSelectors;
+   import springfox.documentation.service.ApiInfo;
+   import springfox.documentation.service.Contact;
+   import springfox.documentation.spi.DocumentationType;
+   import springfox.documentation.spring.web.plugins.Docket;
+   import springfox.documentation.swagger2.annotations.EnableSwagger2WebMvc;
+   
+   /**
+    * 自定义Swagger接口文档使用的配置
+    *
+    * @author 落樱的悔恨
+    */
+   @Configuration
+   @EnableSwagger2WebMvc
+   public class Swagger2Configuration {
+       @Bean(value = "defaultApi2")
+       public Docket createRestApi(){
+           return new Docket(DocumentationType.SWAGGER_2)
+                   .apiInfo(apiInfo())
+                   .select()
+                   //这里标注controller包的位置
+                   .apis(RequestHandlerSelectors.basePackage("com.luoying.controller"))
+                   .paths(PathSelectors.any())
+                   .build();
+       }
+    
+       //api基本信息的配置，信息会在api文档上显示
+       private ApiInfo apiInfo(){
+           return new ApiInfoBuilder()
+                   .title("LUOYING用户中心")
+                   .description("LUOYING用户中心相关接口的文档")
+                   .termsOfServiceUrl("http://github.com/1ranxu")
+                   .contact(new Contact("ranxu","http://github.com/1ranxu","1574925401@qq.com"))
+                   .version("1.0")
+                   .build();
+       }
+   }
+   ```
+
+3. 修改配置文件
+
+   ```yml
+   spring:  
+     mvc:
+       pathmatch:
+         matching-strategy: ant_path_matcher
+   #springboot版本>=2.6，
+   ```
+
+4. 效果
+
+   ![image-20230916195725901](assets/image-20230916195725901.png)
 
 ### 组队
 
