@@ -531,7 +531,7 @@ public List<UserDTO> queryUsersByTagsByMemory(List<String> tagList) {
 
 7. 注意：线上环境不要把接口暴露出去！！！
 
-8. 隐藏 可以通过在 SwaggerConfig 配置文件开头加上 `@Profile({"dev", "test"})` 限定配置仅在部分环境开启
+8. 隐藏 可以通过在 SwaggerConfig 配置类开头加上 `@Profile({"dev", "test"})` 限定配置仅在部分环境开启，其实是限制bean在特定环境下被注册到容器中
 
 **整合**
 
@@ -608,6 +608,141 @@ public List<UserDTO> queryUsersByTagsByMemory(List<String> tagList) {
 4. 效果
 
    ![image-20230916195725901](assets/image-20230916195725901.png)
+
+### 存量用户信息导入及同步（爬虫）
+
+1. 把所有星球用户的信息导入用户表
+2. 从每个用户的自我介绍中解析标签，在用户表中给每个用户打标签，并把解析的标签导入标签表
+
+**看上了网页信息，怎么抓取**
+
+FeHelper
+
+1. 分析原网站是用哪个接口获取的[api.zsxq.com/v2/hashtags/48844541281228/topics?count=20](https://api.zsxq.com/v2/hashtags/48844541281228/topics?count=20)
+
+   按 F 12 打开控制台，查看网络请求，复制 curl 代码便于查看和执行：
+
+   ```bash
+   curl "https://api.zsxq.com/v2/hashtags/48844541281228/topics?count=20" ^
+     -H "authority: api.zsxq.com" ^
+     -H "accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7" ^
+     -H "accept-language: zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6" ^
+     -H "cache-control: max-age=0" ^
+     -H "cookie: zsxq_access_token=AA992A14-3A7E-86B6-02ED-06E0FC6B65FE_2EF81009CEAA9466; sensorsdata2015jssdkcross=^%^7B^%^22distinct_id^%^22^%^3A^%^2218a8ea5df263fd-099a715b3ba0c38-7f5d547e-1327104-18a8ea5df27174d^%^22^%^2C^%^22first_id^%^22^%^3A^%^22^%^22^%^2C^%^22props^%^22^%^3A^%^7B^%^22^%^24latest_traffic_source_type^%^22^%^3A^%^22^%^E5^%^BC^%^95^%^E8^%^8D^%^90^%^E6^%^B5^%^81^%^E9^%^87^%^8F^%^22^%^2C^%^22^%^24latest_search_keyword^%^22^%^3A^%^22^%^E6^%^9C^%^AA^%^E5^%^8F^%^96^%^E5^%^88^%^B0^%^E5^%^80^%^BC^%^22^%^2C^%^22^%^24latest_referrer^%^22^%^3A^%^22https^%^3A^%^2F^%^2Fwww.yuque.com^%^2F^%^22^%^7D^%^2C^%^22identities^%^22^%^3A^%^22eyIkaWRlbnRpdHlfY29va2llX2lkIjoiMThhOGVhNWRmMjYzZmQtMDk5YTcxNWIzYmEwYzM4LTdmNWQ1NDdlLTEzMjcxMDQtMThhOGVhNWRmMjcxNzRkIn0^%^3D^%^22^%^2C^%^22history_login_id^%^22^%^3A^%^7B^%^22name^%^22^%^3A^%^22^%^22^%^2C^%^22value^%^22^%^3A^%^22^%^22^%^7D^%^2C^%^22^%^24device_id^%^22^%^3A^%^2218a8ea5df263fd-099a715b3ba0c38-7f5d547e-1327104-18a8ea5df27174d^%^22^%^7D; abtest_env=product; zsxqsessionid=b0e9ee1668ca2ed22f495c4c2190422f" ^
+     -H "sec-ch-ua: ^\^"Microsoft Edge^\^";v=^\^"117^\^", ^\^"Not;A=Brand^\^";v=^\^"8^\^", ^\^"Chromium^\^";v=^\^"117^\^"" ^
+     -H "sec-ch-ua-mobile: ?0" ^
+     -H "sec-ch-ua-platform: ^\^"Windows^\^"" ^
+     -H "sec-fetch-dest: document" ^
+     -H "sec-fetch-mode: navigate" ^
+     -H "sec-fetch-site: none" ^
+     -H "sec-fetch-user: ?1" ^
+     -H "upgrade-insecure-requests: 1" ^
+     -H "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.31" ^
+     --compressed
+   ```
+
+
+2. **用程序去调用接口** （java okhttp httpclient / python 都可以）
+3. 处理（清洗）一下数据，之后就可以写到数据库里
+
+**流程**
+
+1. 从 excel 中导入全量用户数据，**判重** 。 [EasyExcel官方文档 - 基于Java的Excel处理工具 | Easy Excel (alibaba.com)](https://easyexcel.opensource.alibaba.com/index.html)
+2. 抓取写了自我介绍的同学信息，提取出用户昵称、用户唯一 id、自我介绍信息
+3. 从自我介绍中提取信息，然后写入到数据库中
+
+**使用EasyExcel从Excel表中读取数据**
+
+1. 引入依赖
+
+   ```java
+   <!-- https://mvnrepository.com/artifact/com.alibaba/easyexcel -->
+   <dependency>
+       <groupId>com.alibaba</groupId>
+       <artifactId>easyexcel</artifactId>
+       <version>3.1.1</version>
+   </dependency>
+   ```
+
+2. 建立对象，和Excel表字段形成映射关系
+
+   ```java
+   @Data
+   public class DemoData {
+       /**
+        * 成员编号
+        */
+       @ExcelProperty("成员编号")
+       private String authCode;
+   
+       /**
+        * 用户昵称
+        */
+       @ExcelProperty("成员昵称")
+       private String username;
+   
+   }
+   ```
+
+3. 读取模式（任选一种)
+
+   1. 监听器
+
+   ```java
+   // 有个很重要的点 DemoDataListener 不能被spring管理，要每次读取excel都要new,然后里面用到spring可以构造方法传进去
+   @Slf4j
+   public class DemoDataListener implements ReadListener<DemoData> {
+   
+       /**
+        * 这个每一条数据解析都会来调用
+        *
+        * @param data    one row value. Is is same as {@link AnalysisContext#readRowHolder()}
+        * @param context
+        */
+       @Override
+       public void invoke(DemoData data, AnalysisContext context) {
+           System.out.println(data);
+       }
+   
+       /**
+        * 所有数据解析完成了 都会来调用
+        *
+        * @param context
+        */
+       @Override
+       public void doAfterAllAnalysed(AnalysisContext context) {
+           System.out.println("完成");
+       }
+   
+   }
+   ```
+
+   2. 同步读
+
+   ```java
+   /**
+    * 同步的读取，不推荐使用，如果数据量大会把数据放到内存里面
+    */
+   public static void synchronousRead() {
+       // 写法2
+       String fileName = "prodExcel.xlsx";
+       // 这里 需要指定读用哪个class去读，然后读取第一个sheet 同步读取会自动finish
+       List<DemoData> toatlDataList = EasyExcel.read(fileName).head(DemoData.class).sheet().doReadSync();
+       for (DemoData demoData : toatlDataList) {
+           System.out.println(demoData);
+       }
+   }
+   ```
+
+两种读对象的方式：
+
+1. 确定表头：建立对象，和表头形成映射关系
+2. 不确定表头：每一行数据映射为 Map<String, Object>
+
+两种读取模式：
+
+1. 监听器：先创建监听器、在读取文件时绑定监听器。单独抽离处理逻辑，代码清晰易于维护；一条一条处理，适用于数据量大的场景。
+2. 同步读：无需创建监听器，一次性获取完整数据。方便简单，但是数据量大时会有等待时常，也可能内存溢出。
 
 ### 组队
 
