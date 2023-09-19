@@ -71,7 +71,8 @@
    1. 搜索页
    2. 用户信息页
    3. 用户信息修改页
-
+   4. 搜索结果页
+   
 8. **部分细节优化**
 
 
@@ -326,20 +327,6 @@ create index Idx_userId
 
 **用户表**：
 
-- id  （主键）bigint
-- userAccount 登录账号 varchar
-- username 用户昵称 varchar
-- avatarUrl 用户头像 varchar
-- gender 用户性别 tinyint 0 1
-- userPassword 用户密码 varchar
-- phone 用户电话 varchar
-- email 用户邮箱 varchar
-- userStatus 用户状态 int  0-正常 
-- createTime 用户创建时间 datetime
-- updateTime 用户更新时间 datetime
-- isDeleted 用户是否删除(逻辑删除) tinyint 0 1
-- userRole 用户角色 
-
 ```mysql
 DROP TABLE IF EXISTS user;
 
@@ -365,6 +352,8 @@ create table user_center.user
     comment '用户表';
 #补充tags字段    
 alter table user add COLUMN tags varchar(1024) null comment '标签列表Json'
+#补充profile字段  
+alter table user add COLUMN profile varchar(512) null comment '个人简介'
 ```
 
 ## 后端项目初始化
@@ -472,6 +461,22 @@ public List<UserDTO> queryUsersByTagsByMemory(List<String> tagList) {
 ![image-20230915153041395](assets/image-20230915153041395.png)
 
 ![image-20230915153137469](assets/image-20230915153137469.png)
+
+3. 在UserController中添加searchByTags方法，接受前端请求
+
+```
+@GetMapping("/searchByTags")
+public Result searchByTags(@RequestParam(required = false) List<String> tags){
+    if (CollectionUtil.isEmpty(tags)){
+        throw new BusinessException(ErrorCode.PARAMS_ERROR,"标签为空");
+    }
+    return Result.success(userService.queryUsersByTagsByMemory(tags));
+}
+```
+
+4. 解决跨域
+
+![image-20230919203356552](assets/image-20230919203356552.png)
 
 ### 整合Swagger + Knife4j 接口文档
 
@@ -899,3 +904,112 @@ yarn add vue-router@4
 
    ![image-20230916173529752](assets/image-20230916173529752.png)
 
+### 搜索结果页
+
+1. 安装axios
+
+```sh
+#用来发请求
+npm install axios
+```
+
+![image-20230919194157437](assets/image-20230919194157437.png)
+
+创建实例[axios中文文档|axios中文网 | axios (axios-js.com)](http://axios-js.com/zh-cn/docs/#axios-create-config)
+
+```js
+import axios from "axios";
+const my_axios = axios.create({
+    baseURL: 'http://localhost:8080/api/',
+    timeout: 100000,
+    headers: {
+        'Authorization': sessionStorage.getItem("token"),
+    }
+});
+```
+
+创建拦截器[axios中文文档|axios中文网 | axios (axios-js.com)](http://axios-js.com/zh-cn/docs/#拦截器)
+
+```js
+my_axios.interceptors.request.use(function (config) {
+    // 在发送请求之前做些什么
+    console.log("我要发请求了",config)
+    return config;
+}, function (error) {
+    // 对请求错误做些什么
+    return Promise.reject(error);
+});
+
+// 添加响应拦截器
+my_axios.interceptors.response.use(function (response) {
+    // 对响应数据做点什么
+    console.log("我收到响应了",response)
+    return response
+}, function (error) {
+    // 对响应错误做点什么
+    return Promise.reject(error);
+});
+
+export default my_axios;
+```
+
+2. 安装qs
+
+```sh
+#axios使用qs解决数组传参问题
+npm i qs
+```
+
+在使用axios请求的过程中,直接在请求时传参数组，axios显示直接传数组去get请求时是 **tags[]=%E7%94%B7	&tags[]=Java** 我们如果想要没有 [] 连接的格式就需要进行`参数序列化`：使用`qs.stringify`,设置axios配置项中的 `paramsSerializer`
+
+![image-20230919195802237](assets/image-20230919195802237.png)
+
+```js
+my_axios.get('/user/searchByTags', {
+    params: {
+      tags: tags
+    },
+    paramsSerializer: params => qs.stringify(params, {indices: false})
+  })
+//indices: false可以取消URL里数组的下标，如果不这么处理，后端收不到这个数组（名字因为加了下标而不匹配）
+```
+
+![image-20230919200130240](assets/image-20230919200130240.png)
+
+3. 选择组件
+
+![image-20230919200256361](assets/image-20230919200256361.png)
+
+![image-20230919200353616](assets/image-20230919200353616.png)
+
+4. 引入组件
+
+![image-20230919200459410](assets/image-20230919200459410.png)
+
+![image-20230919200947885](assets/image-20230919200947885.png)
+
+5. 添加路由
+
+![image-20230919201604552](assets/image-20230919201604552.png)
+
+6. 修改搜索页
+
+![image-20230919201123344](assets/image-20230919201123344.png)
+
+![image-20230919201422277](assets/image-20230919201422277.png)
+
+7. 修改user.d.ts文件
+
+![image-20230919201800397](assets/image-20230919201800397.png)
+
+8. 在搜素结果页发请求，获取数据，渲染页面
+
+![image-20230919202710179](assets/image-20230919202710179.png)
+
+![image-20230919204047018](assets/image-20230919204047018.png)
+
+9. 效果
+
+![image-20230919204220431](assets/image-20230919204220431.png)
+
+![image-20230919204238304](assets/image-20230919204238304.png)
