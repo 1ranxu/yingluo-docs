@@ -65,11 +65,14 @@
    8. 组队
 6. **前端开发**
    1. 整合路由
-   2. 搜索页面-根据标签搜索用户
-   3. 用户信息页
-   4. 用户信息修改页
-   5. 搜索结果页
-   6. 主页
+   2. 封装myAxios
+   3. 封装获取当前登录用户功能
+   4. 搜索页面-根据标签搜索用户
+   5. 用户信息页
+   6. 用户信息修改页
+   7. 搜索结果页
+   8. 登录页
+   9. 主页
 7. **部分细节优化**
 
 
@@ -355,13 +358,7 @@ alter table user add COLUMN profile varchar(512) null comment '个人简介'
 
 本来想把标签的增删改查等业务放到新项目里，实际分析后，因为标签和用户关联比较强，所以还是把标签的增删改查放到用户中心项目里
 
-1. 把用户中心项目后端代码复制，目录改成partnerMatching-backend，删掉.idea，iml文件；修改pom.xml文件
-
-![image-20230915095601977](assets/image-20230915095601977.png)
-
-## 用户中心提供用户的查询，操作，注册，登录，鉴权
-
-
+用户中心提供用户的查询，操作，注册，登录，鉴权
 
 ## 后端开发
 
@@ -766,9 +763,118 @@ FeHelper
 
 ### 主页推荐
 
+1. 目前是查询所有用户，然后返回，之后再优化
+
+```java
+@GetMapping("/recommend")
+public Result usersRecommend(long currentPage, long pageSize, HttpServletRequest request) {
+    LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper();
+    Page<User> page = userService.page(new Page<User>(currentPage, pageSize), wrapper);
+    List<UserDTO> userDTOList = page.getRecords().stream().map(user1 -> {
+        return BeanUtil.copyProperties(user1, UserDTO.class);
+    }).collect(Collectors.toList());
+    return Result.success(userDTOList);
+}
+```
+
+2. 导入数据
+
+1. 用可视化界面：适合一次性导入、数据量可控
+
+
+   2. 写程序：for 循环，建议分批，（可以用接口来控制）**要保证可控、幂等，注意线上环境和测试环境是有区别的**
+
+      1. 批量查询解决每次插入会建立和释放数据库链接的问题
+
+      ```java
+      //在测试里执行完后一定要删除，不然会影响线上环境
+      @Test
+      public void doInsertUsers() {
+          StopWatch stopWatch = new StopWatch();
+          stopWatch.start();
+          final int Insert_Num = 1000;
+          List<User> userList = new ArrayList<>();
+          for (int i = 0; i < Insert_Num; i++) {
+              User user = new User();
+              user.setUserAccount("fakeUser" + i);
+              user.setUsername("fakeUser" + i);
+              user.setAvatarUrl("https://thirdwx.qlogo.cn/mmopen/vi_32/RNJfsfhsEic2dzoJasQgMoHjw0h5580v6aQ5OOCHM0Fk8B3Fw98CWmZlbqcx8LLDEKunkZnwU5aEliaKhic8MFOYQ/132");
+              user.setGender(0);
+              user.setUserPassword("0123456789");
+              user.setPhone("123");
+              user.setEmail("123@qq.com");
+              user.setUserStatus(0);
+              user.setUserRole(0);
+              user.setAuthCode("66666");
+              user.setTags("[]");
+              user.setProfile("精神小伙");
+              userList.add(user);
+          }
+          userService.saveBatch(userList,100);
+          stopWatch.stop();
+          System.out.println(stopWatch.getTotalTimeMillis());
+      }
+      ```
+
+      2. 并发插入数据
+
+      ```java
+      // CPU 密集型：分配的核心线程数 = CPU - 1
+      // IO 密集型：分配的核心线程数可以大于 CPU 核数
+      private ExecutorService executorService= new ThreadPoolExecutor(60,1000,100000, TimeUnit.SECONDS,new ArrayBlockingQueue<>(10000));
+      @Test
+      public void doConcurrencyInsertUsers() {
+          StopWatch stopWatch = new StopWatch();
+          stopWatch.start();
+          int batchSize = 100;
+          List<CompletableFuture<Void>> futureList=new ArrayList<>();
+          //分十组，每组100条
+          int j=0;
+          for (int i = 0; i < 10; i++) {
+              List<User> userList = new ArrayList<>();
+              while(true) {
+                  j++;
+                  if (j%100==0){
+                      break;
+                  }
+                  User user = new User();
+                  user.setUserAccount("fakeUser" + j);
+                  user.setUsername("fakeUser" + j);
+                  user.setAvatarUrl("https://thirdwx.qlogo.cn/mmopen/vi_32/RNJfsfhsEic2dzoJasQgMoHjw0h5580v6aQ5OOCHM0Fk8B3Fw98CWmZlbqcx8LLDEKunkZnwU5aEliaKhic8MFOYQ/132");
+                  user.setGender(0);
+                  user.setUserPassword("0123456789");
+                  user.setPhone("123");
+                  user.setEmail("123@qq.com");
+                  user.setUserStatus(0);
+                  user.setUserRole(0);
+                  user.setAuthCode("66666");
+                  user.setTags("[]");
+                  user.setProfile("精神小伙");
+                  userList.add(user);
+              }
+              CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                  System.out.println("ThreadName===>"+Thread.currentThread().getName());
+                  userService.saveBatch(userList, batchSize);
+              },executorService);
+              futureList.add(future);
+          }
+          CompletableFuture.allOf(futureList.toArray(new CompletableFuture[]{})).join();
+          stopWatch.stop();
+          System.out.println(stopWatch.getTotalTimeMillis());
+      }
+      ```
+
+   3. 执行 SQL 语句：适用于小数据量
+
+并发要注意执行的先后顺序无所谓，不要用到非并发类的集合
+
+数据库慢？预先把数据查出来，放到一个更快读取的地方，不用再查数据库了。（缓存）
+
+预加载缓存，定时更新缓存。（定时任务）
+
+多个机器都要执行任务么？（分布式锁：控制同一时间只有一台机器去执行定时任务，其他机器不用重复执行了）
+
 ### 组队
-
-
 
 ## 前端开发
 
@@ -1047,6 +1153,16 @@ my_axios.get('/user/searchByTags', {
 
 ![-](assets/image-20230919204238304.png)
 
+10. 修改搜索结果页
+
+![image-20230921155113015](assets/image-20230921155113015.png)
+
+### 封装card组件
+
+![image-20230921154447041](assets/image-20230921154447041.png)
+
+![image-20230921160105261](assets/image-20230921160105261.png)
+
 ### 登录页
 
 1. 选择组件
@@ -1065,3 +1181,6 @@ my_axios.get('/user/searchByTags', {
 
 ### 主页
 
+![image-20230921155345911](assets/image-20230921155345911.png)
+
+![image-20230921155757224](assets/image-20230921155757224.png)
