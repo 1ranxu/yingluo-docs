@@ -58,24 +58,19 @@
    1. 使用标签搜索用户
    2. 整合Swagger + Knife4j 接口文档
    3. 存量用户信息导入及同步（爬虫）
-   4. 标签内容整理
-   5. 组队
-   6. 用户修改
-   7. 推荐
+   4. 用户修改个人信息
+   5. 主页推荐（默认推荐和自己兴趣相当的用户）
+   6. 优化主页性能（缓存 +定时任务+分布式锁）
+   7. 标签内容整理
+   8. 组队
 6. **前端开发**
    1. 整合路由
    2. 搜索页面-根据标签搜索用户
    3. 用户信息页
    4. 用户信息修改页
-7. **前后端联调**
-   1. 搜索页
-   2. 用户信息页
-   3. 用户信息修改页
-   4. 搜索结果页
-   
-8. **部分细节优化**
-
-
+   5. 搜索结果页
+   6. 主页
+7. **部分细节优化**
 
 
 
@@ -749,11 +744,29 @@ FeHelper
 1. 监听器：先创建监听器、在读取文件时绑定监听器。单独抽离处理逻辑，代码清晰易于维护；一条一条处理，适用于数据量大的场景。
 2. 同步读：无需创建监听器，一次性获取完整数据。方便简单，但是数据量大时会有等待时常，也可能内存溢出。
 
+### 用户修改个人信息
+
+1. 重写userUpdate，添加getLoginUser，迁移isAdmin
+
+![image-20230921112906473](assets/image-20230921112906473.png)
+
+![image-20230921113337257](assets/image-20230921113337257.png)
+
+![image-20230921113435280](assets/image-20230921113435280.png)
+
+![image-20230921113532147](assets/image-20230921113532147.png)
+
+2. 修改UserController
+
+![image-20230921113922404](assets/image-20230921113922404.png)
+
+![image-20230921114205296](assets/image-20230921114205296.png)
+
+![image-20230921114720510](assets/image-20230921114720510.png)
+
+### 主页推荐
+
 ### 组队
-
-### 用户修改
-
-### 推荐
 
 
 
@@ -797,6 +810,63 @@ yarn add vue-router@4
    ![image-20230916151307992](assets/image-20230916151307992.png)
 
    编程式路由参考[编程式导航 | Vue Router (vuejs.org)](https://router.vuejs.org/zh/guide/essentials/navigation.html)
+
+### 封装myAxios
+
+1. 安装axios
+
+```sh
+#用来发请求
+npm install axios
+```
+
+![image-20230919194157437](assets/image-20230919194157437.png)
+
+创建实例[axios中文文档|axios中文网 | axios (axios-js.com)](http://axios-js.com/zh-cn/docs/#axios-create-config)
+
+```js
+import axios from "axios";
+const my_axios = axios.create({
+    baseURL: 'http://localhost:8080/api/',
+    timeout: 100000,
+    headers: {
+        'Authorization': sessionStorage.getItem("token"),
+    }
+});
+```
+
+创建拦截器[axios中文文档|axios中文网 | axios (axios-js.com)](http://axios-js.com/zh-cn/docs/#拦截器)
+
+```js
+my_axios.interceptors.request.use(function (config) {
+    // 在发送请求之前做些什么
+    console.log("我要发请求了",config)
+    return config;
+}, function (error) {
+    // 对请求错误做些什么
+    return Promise.reject(error);
+});
+
+// 添加响应拦截器
+my_axios.interceptors.response.use(function (response) {
+    // 对响应数据做点什么
+    console.log("我收到响应了",response)
+    return response
+}, function (error) {
+    // 对响应错误做点什么
+    return Promise.reject(error);
+});
+
+export default my_axios;
+```
+
+2. 允许请求携带Cookie
+
+![image-20230921110151688](assets/image-20230921110151688.png)
+
+### 封装获取当前登录用户功能
+
+![image-20230921104224748](assets/image-20230921104224748.png)
 
 ### 搜索页
 
@@ -871,6 +941,12 @@ yarn add vue-router@4
 4. 效果
 
    ![image-20230916160600348](assets/image-20230916160600348.png)
+   
+   5. 修改用户信息页
+   
+   ![image-20230921105131541](assets/image-20230921105131541.png)
+   
+   ![image-20230921105342032](assets/image-20230921105342032.png)
 
 ### 用户信息修改页
 
@@ -904,56 +980,13 @@ yarn add vue-router@4
 
    ![image-20230916173529752](assets/image-20230916173529752.png)
 
+7. 修改用户信息修改页
+
+![image-20230921105947435](assets/image-20230921105947435.png)
+
 ### 搜索结果页
 
-1. 安装axios
-
-```sh
-#用来发请求
-npm install axios
-```
-
-![image-20230919194157437](assets/image-20230919194157437.png)
-
-创建实例[axios中文文档|axios中文网 | axios (axios-js.com)](http://axios-js.com/zh-cn/docs/#axios-create-config)
-
-```js
-import axios from "axios";
-const my_axios = axios.create({
-    baseURL: 'http://localhost:8080/api/',
-    timeout: 100000,
-    headers: {
-        'Authorization': sessionStorage.getItem("token"),
-    }
-});
-```
-
-创建拦截器[axios中文文档|axios中文网 | axios (axios-js.com)](http://axios-js.com/zh-cn/docs/#拦截器)
-
-```js
-my_axios.interceptors.request.use(function (config) {
-    // 在发送请求之前做些什么
-    console.log("我要发请求了",config)
-    return config;
-}, function (error) {
-    // 对请求错误做些什么
-    return Promise.reject(error);
-});
-
-// 添加响应拦截器
-my_axios.interceptors.response.use(function (response) {
-    // 对响应数据做点什么
-    console.log("我收到响应了",response)
-    return response
-}, function (error) {
-    // 对响应错误做点什么
-    return Promise.reject(error);
-});
-
-export default my_axios;
-```
-
-2. 安装qs
+1. 安装qs
 
 ```sh
 #axios使用qs解决数组传参问题
@@ -1012,4 +1045,23 @@ my_axios.get('/user/searchByTags', {
 
 ![image-20230919204220431](assets/image-20230919204220431.png)
 
-![image-20230919204238304](assets/image-20230919204238304.png)
+![-](assets/image-20230919204238304.png)
+
+### 登录页
+
+1. 选择组件
+
+![image-20230921104427097](assets/image-20230921104427097.png)
+
+2. 引入组件
+
+![image-20230921104605948](assets/image-20230921104605948.png)
+
+![image-20230921104759490](assets/image-20230921104759490.png)
+
+3. 添加路由
+
+![image-20230921105414644](assets/image-20230921105414644.png)
+
+### 主页
+
