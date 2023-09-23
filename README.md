@@ -1184,3 +1184,244 @@ my_axios.get('/user/searchByTags', {
 ![image-20230921155345911](assets/image-20230921155345911.png)
 
 ![image-20230921155757224](assets/image-20230921155757224.png)
+
+## 数据库查询慢怎么办？
+
+使用缓存：提前把数据取出来保存好（通常保存到读写更快的介质，比如内存），就可以更快地读写。
+
+### 缓存的实现
+
+- Redis（分布式缓存）（**采用**）
+- memcached（分布式）
+- Etcd（云原生架构的一个分布式存储，**存储配置**，扩容能力）（**需要学习**）
+
+---
+
+- ehcache（单机）
+
+- 本地缓存（Java 内存 Map）
+- Caffeine（Java 内存缓存，高性能）
+- Google Guava
+
+### Redis介绍
+
+> NoSQL 数据库
+
+key - value 存储系统（区别于 MySQL，他存储的是键值对）
+
+### 设计缓存 key
+
+不同用户看到的数据不同
+
+systemId:moduleId:func:options（不要和别人冲突）
+
+yingluo:user:recommed:userId
+
+**redis 内存不能无限增加，一定要设置过期时间！！！**  
+
+### 给主页推荐功能设置缓存
+
+1. Service层
+
+```java
+@Override
+public List<UserDTO> usersRecommend(long currentPage, long pageSize, HttpServletRequest request) {
+    //获取当前登录用户
+    UserDTO loginUser = this.getLoginUser(request);
+    //拼接key
+    String key = RECOMMEND_USUERS_KEY + loginUser.getId();
+    //读取缓存
+    String userDTOListJson = stringRedisTemplate.opsForValue().get(key);
+    //反序列化
+    JSONArray objects = JSONUtil.parseArray(userDTOListJson);
+    //遍历数组，把user添加到List集合
+    Iterator<Object> iterator = objects.stream().iterator();
+    List userDTOList = new ArrayList();
+    while (iterator.hasNext()) {
+        userDTOList.add(iterator.next());
+    }
+    //如果有缓存直接读缓存
+    if (userDTOList != null && !userDTOList.isEmpty()) {
+        return userDTOList;
+    }
+    //如果有没缓存查数据库
+    LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper();
+    Page<User> page = this.page(new Page<User>(currentPage, pageSize), wrapper);
+    userDTOList = page.getRecords().stream().map(user1 -> {
+        return BeanUtil.copyProperties(user1, UserDTO.class);
+    }).collect(Collectors.toList());
+    //将查询到的数据添加到缓存
+    userDTOListJson = JSONUtil.toJsonStr(userDTOList);
+    stringRedisTemplate.opsForValue().set(key, userDTOListJson,3, TimeUnit.MINUTES);
+    return userDTOList;
+}
+```
+
+2. Controller层
+
+```java
+@GetMapping("/recommend")
+public Result usersRecommend(long currentPage, long pageSize, HttpServletRequest request) {
+    //返回数据
+    return Result.success(userService.usersRecommend(currentPage, pageSize, request));
+}
+```
+
+### Redis在Java 里的实现方式
+
+#### Spring Data Redis（推荐）
+
+Spring Data：通用的数据访问框架，定义了一组 **增删改查** 的接口
+
+mysql、redis、jpa
+
+[spring-data-redis](https://mvnrepository.com/artifact/org.springframework.data/spring-data-redis)
+
+1）引入
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-data-redis</artifactId>
+</dependency>
+```
+
+2）配置 Redis 地址
+
+```yml
+spring:
+  redis:
+    host: 127.0.0.1
+    port: 6379
+    password: 123
+    database: 0
+```
+
+#### Jedis
+
+独立于 Spring 操作 Redis 的 Java 客户端
+
+要配合 Jedis Pool 使用
+
+
+
+#### Lettuce
+
+**高阶** 的操作 Redis 的 Java 客户端
+
+异步、连接池
+
+
+
+#### Redisson
+
+分布式操作 Redis 的 Java 客户端，让你像在使用本地的集合一样操作 Redis（分布式 Redis 数据网格）
+
+
+
+#### JetCache 
+
+
+
+对比
+
+1. 如果你用的是 Spring，并且没有过多的定制化要求，可以用 Spring Data Redis，最方便
+2. 如果你用的不是 SPring，并且追求简单，并且没有过高的性能要求，可以用 Jedis + Jedis Pool
+3. 如果你的项目不是 Spring，并且追求高性能、高定制化，可以用 Lettuce，支持异步、连接池
+
+---
+
+- 如果你的项目是分布式的，需要用到一些分布式的特性（比如分布式锁、分布式集合），推荐用 redisson
+
+
+
+### 缓存预热
+
+问题：第一个用户访问还是很慢，也能一定程度上保护数据库
+
+缓存预热的优点：
+
+1. 解决上面的问题，可以让用户始终访问很快
+
+缺点：
+
+1. 增加开发成本（额外的开发、设计）
+2. 预热的时机和时间如果错了，有可能你缓存的数据不对或者太老
+3. 需要占用额外空间
+
+#### 怎么缓存预热？
+
+1. 定时
+2. 模拟触发（手动触发）
+
+用定时任务，每天刷新所有用户的推荐列表
+
+注意点：
+
+1. 缓存预热的意义（新增少、总用户多）
+2. 缓存的空间不能太大，要预留给其他缓存空间
+3. 缓存数据的周期（此处每天一次）
+
+
+
+> 分析优缺点的时候，要打开思路，从整个项目从 0 到 1 的链路上去分析
+
+### 定时任务实现
+
+1. **Spring Scheduler（spring boot 默认整合了）** 
+2. Quartz（独立于 Spring 存在的定时任务框架）
+3. XXL-Job 之类的分布式任务调度平台（界面 + sdk）
+
+
+
+第一种方式：
+
+1. 启动类开启 @EnableScheduling
+
+   
+
+2. 给要定时执行的方法添加 @Scheduling 注解，指定 cron 表达式或者执行频率
+
+```java
+/**
+ * 缓存预热任务
+ */
+@Component
+public class PreCacheJob {
+    @Resource
+    private UserService userService;
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+    //重点用户
+    List<Long> mainUserList = Arrays.asList(2l);
+
+    //每天13：11执行
+    @Scheduled(cron = "0 11 13 * * *")//秒 分 时 日 月 年
+    public void doCacheRecommendUser() {
+        for (Long userId : mainUserList) {
+            //拼接key
+            String key = RECOMMEND_USUERS_KEY + userId;
+            //缓存20条
+            LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper();
+            Page<User> page = userService.page(new Page<User>(1, 20), wrapper);
+
+            List<UserDTO> userDTOList = page.getRecords().stream().map(user1 -> {
+                return BeanUtil.copyProperties(user1, UserDTO.class);
+            }).collect(Collectors.toList());
+            //将查询到的数据添加到缓存
+            String userDTOListJson = JSONUtil.toJsonStr(userDTOList);
+            stringRedisTemplate.opsForValue().set(key, userDTOListJson, 3, TimeUnit.MINUTES);
+        }
+    }
+
+}
+```
+
+不要去背 cron 表达式！！！！！
+
+- https://cron.qqe2.com/
+- https://www.matools.com/crontab/
+
+---
+
+
