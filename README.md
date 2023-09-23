@@ -1203,12 +1203,6 @@ my_axios.get('/user/searchByTags', {
 - Caffeine（Java 内存缓存，高性能）
 - Google Guava
 
-### Redis介绍
-
-> NoSQL 数据库
-
-key - value 存储系统（区别于 MySQL，他存储的是键值对）
-
 ### 设计缓存 key
 
 不同用户看到的数据不同
@@ -1337,11 +1331,9 @@ spring:
 
 ### 缓存预热
 
-问题：第一个用户访问还是很慢，也能一定程度上保护数据库
+优点：
 
-缓存预热的优点：
-
-1. 解决上面的问题，可以让用户始终访问很快
+1. 解决第一个用户访问还是很慢的问题，可以让用户始终访问很快，也能一定程度上保护数据库
 
 缺点：
 
@@ -1351,10 +1343,8 @@ spring:
 
 #### 怎么缓存预热？
 
-1. 定时
+1. 定时（用定时任务，每天刷新所有用户的推荐列表）
 2. 模拟触发（手动触发）
-
-用定时任务，每天刷新所有用户的推荐列表
 
 注意点：
 
@@ -1362,17 +1352,11 @@ spring:
 2. 缓存的空间不能太大，要预留给其他缓存空间
 3. 缓存数据的周期（此处每天一次）
 
-
-
-> 分析优缺点的时候，要打开思路，从整个项目从 0 到 1 的链路上去分析
-
-### 定时任务实现
+#### 定时任务实现
 
 1. **Spring Scheduler（spring boot 默认整合了）** 
 2. Quartz（独立于 Spring 存在的定时任务框架）
 3. XXL-Job 之类的分布式任务调度平台（界面 + sdk）
-
-
 
 第一种方式：
 
@@ -1423,5 +1407,200 @@ public class PreCacheJob {
 - https://www.matools.com/crontab/
 
 ---
+
+### 控制定时任务的执行
+
+不进行控制的缺点：
+
+1. 浪费资源，想象 10000 台服务器同时执行定时任务
+2. 脏数据，比如重复插入
+
+****
+
+**要控制定时任务在同一时间只有 1 个服务器能执行。怎么做？**
+
+1. 分离定时任务程序和主程序，只在 1 个服务器运行定时任务。成本太大
+
+2. 写死配置，每个服务器都执行定时任务，但是只有 ip 符合配置的服务器才真实执行业务逻辑，其他的直接返回。成本最低；但是我们的 IP 可能是不固定的，把 IP 写的太死了
+
+3. 动态配置，配置是可以轻松的、很方便地更新的（**代码无需重启**），但是只有 ip 符合配置的服务器才真实执行业务逻辑。
+
+   - 数据库
+   - Redis
+   - 配置中心（Nacos、Apollo、Spring Cloud Config）
+
+   问题：服务器多了、IP 不可控还是很麻烦，还是要人工修改
+
+4. 分布式锁，只有抢到锁的服务器才能执行业务逻辑。坏处：增加成本；好处：不用手动配置，多少个服务器都一样。
+
+#### 锁
+
+有限资源的情况下，控制同一时间（段）只有某些线程（用户 / 服务器）能访问到资源。
+
+Java 实现锁：synchronized 关键字、并发包的类
+
+问题：只对单个 JVM 有效
+
+####  分布式锁
+
+为啥需要分布式锁？
+
+1. 有限资源的情况下，控制同一时间（段）只有某些线程（用户 / 服务器）能访问到资源。
+2. 单个锁只对单个 JVM 有效
+
+#### 分布式锁实现的关键
+
+##### 抢锁机制
+
+保证同一时间只有 1 个服务器能抢到锁
+
+核心思想 就是：先来的人先把数据改成自己的标识（服务器 ip），后来的人发现标识已存在，就抢锁失败，继续等待。
+
+等先来的人执行方法结束，把标识清空，其他的人继续抢锁。
+
+MySQL 数据库：select for update 行级锁（最简单）
+
+（乐观锁）
+
+✔ Redis 实现：内存数据库，读写速度快 。支持 setnx、lua 脚本，比较方便我们实现分布式锁。
+
+setnx：set if not exists 如果不存在，则设置；只有设置成功才会返回 true，否则返回 false
+
+##### 注意事项
+
+1. 用完锁要释放（腾地方）√
+
+2. 锁一定要加过期时间 √
+
+3. 如果方法执行时间过长，锁提前过期了？
+
+   问题：
+
+   1. 连锁效应：释放掉别人的锁
+   2. 这样还是会存在多个方法同时执行的情况
+
+​	解决方案：续期
+
+```java
+boolean end = false;
+
+new Thread(() -> {
+    if (!end)}{
+    续期
+})
+
+end = true;
+
+```
+
+4. 释放锁的时候，有可能先判断出是自己的锁，但这时锁过期了，最后还是释放了别人的锁
+
+   ```java
+   // 原子操作
+   if(get lock == A) {
+       // set lock B
+       del lock
+   }
+   ```
+
+   Redis + lua 脚本实现
+
+5. Redis 如果是集群（而不是只有一个 Redis），如果分布式锁的数据不同步怎么办？
+
+https://blog.csdn.net/feiying0canglang/article/details/113258494
+
+#### Redisson 实现分布式锁
+
+Redisson 是一个 java 操作 Redis 的客户端，实现了很多 Java 里支持的接口和数据结构，**提供了大量的分布式数据集来简化对 Redis 的操作和使用，可以让开发者像使用本地集合一样使用 Redis，完全感知不到 Redis 的存在。**
+
+**2 种引入方式**
+
+1. spring boot starter 引入（不推荐，版本迭代太快，容易冲突）https://github.com/redisson/redisson/tree/master/redisson-spring-boot-starter
+2. 直接引入：https://github.com/redisson/redisson#quick-start
+
+##### 定时任务  + 锁
+
+1. waitTime 设置为 0，只抢一次，抢不到就放弃
+2. 注意释放锁要写在 finally 中
+
+##### 实现代码
+
+```java
+/**
+ * 缓存预热任务
+ */
+@Component
+@Slf4j
+public class PreCacheJob {
+    @Resource
+    private UserService userService;
+
+    @Resource
+    private StringRedisTemplate stringRedisTemplate;
+
+    @Resource
+    private RedissonClient redissonClient;
+    //重点用户
+    List<Long> mainUserList = Arrays.asList(2l);
+
+    //每天执行
+    @Scheduled(cron = "0 37 16 * * *")
+    public void doCacheRecommendUser() {
+        RLock lock = redissonClient.getLock(PRECACHEJOB_DOCACHE_LOCK);
+        try {
+            // 将waittime设置为0，那么意味着不会等待任何时间，直接尝试获取锁，如果获取到了锁，那么方法会返回true，否则返回false。
+            // 只有一个线程能获取锁
+            if (lock.tryLock(0,-1, TimeUnit.SECONDS)) {
+                log.info("getLock");
+                for (Long userId : mainUserList) {
+                    //拼接key
+                    String key = RECOMMEND_USUERS_KEY + userId;
+                    //缓存20条
+                    LambdaQueryWrapper<User> wrapper = new LambdaQueryWrapper();
+                    Page<User> page = userService.page(new Page<User>(1, 20), wrapper);
+
+                    List<UserDTO> userDTOList = page.getRecords().stream().map(user1 -> {
+                        return BeanUtil.copyProperties(user1, UserDTO.class);
+                    }).collect(Collectors.toList());
+                    //将查询到的数据添加到缓存
+                    String userDTOListJson = JSONUtil.toJsonStr(userDTOList);
+                    stringRedisTemplate.opsForValue().set(key, userDTOListJson, RECOMMEND_USUERS_KEY_TTL, TimeUnit.MINUTES);
+                }
+                //只能释放自己加的锁
+
+            }
+        } catch (InterruptedException e) {
+            log.error(e.getMessage());
+        } finally {
+            if (lock.isHeldByCurrentThread()){
+                log.info("getLock");
+                lock.unlock();
+            }
+        }
+
+    }
+
+}
+```
+
+##### 看门狗机制
+
+> redisson 中提供的续期机制
+
+开一个监听线程，如果方法还没执行完，就帮你重置 redis 锁的过期时间。
+
+原理：
+
+1. 监听当前线程，默认过期时间是 30 秒，每 10 秒续期一次（补到 30 秒），续的时间不太长是为了防止服务器宕机，锁无法释放
+2. 如果线程挂掉（注意 debug 模式也会被它当成服务器宕机），则不会续期
+
+https://blog.csdn.net/qq_26222859/article/details/79645203
+
+---
+
+
+
+Zookeeper 实现（不推荐）
+
 
 
