@@ -819,22 +819,21 @@ public Result usersRecommend(long currentPage, long pageSize, HttpServletRequest
       2. 并发插入数据
 
       ```java
-      // CPU 密集型：分配的核心线程数 = CPU - 1
-      // IO 密集型：分配的核心线程数可以大于 CPU 核数
-      private ExecutorService executorService= new ThreadPoolExecutor(60,1000,100000, TimeUnit.SECONDS,new ArrayBlockingQueue<>(10000));
+      private ExecutorService executorService= new ThreadPoolExecutor(
+              60,1000,100000, TimeUnit.SECONDS,new ArrayBlockingQueue<>(10000));
       @Test
       public void doConcurrencyInsertUsers() {
           StopWatch stopWatch = new StopWatch();
           stopWatch.start();
-          int batchSize = 100;
+          int batchSize = 25000;
           List<CompletableFuture<Void>> futureList=new ArrayList<>();
-          //分十组，每组100条
+          //分十组，每组100000条
           int j=0;
           for (int i = 0; i < 10; i++) {
               List<User> userList = new ArrayList<>();
               while(true) {
                   j++;
-                  if (j%100==0){
+                  if (j%100000==0){
                       break;
                   }
                   User user = new User();
@@ -863,7 +862,7 @@ public Result usersRecommend(long currentPage, long pageSize, HttpServletRequest
           System.out.println(stopWatch.getTotalTimeMillis());
       }
       ```
-
+      
    3. 执行 SQL 语句：适用于小数据量
 
 并发要注意执行的先后顺序无所谓，不要用到非并发类的集合
@@ -875,6 +874,669 @@ public Result usersRecommend(long currentPage, long pageSize, HttpServletRequest
 多个机器都要执行任务么？（分布式锁：控制同一时间只有一台机器去执行定时任务，其他机器不用重复执行了）
 
 ### 组队
+
+#### **理想的应用场景**
+
+1. 我要跟别人一起参加竞赛或者做项目，可以发起队伍或者加入别人的队伍
+
+#### **需求分析**
+
+1. 用户可以创建一个队伍，设置队伍的人数，队伍名称（标题）、描述、超时时间 P0
+
+   > 队长、剩余的人数
+   >
+   > 聊天？
+   >
+   > 公开 或 private 或加密
+   >
+   > **用户创建队伍最多 5 个**
+
+2. 展示队伍列表，根据名称搜索队伍  P0，信息流中不展示已过期的队伍 P0
+
+3. 修改队伍信息 P0 ~ P1
+
+4. 用户可以加入其他人的队伍（未满、未过期），允许加入多个队伍，但是要有个上限  P0
+
+   > 是否需要队长同意？筛选审批？
+
+5. 用户可以退出队伍（如果队长退出，权限转移给第二早加入的用户 —— 先来后到） P1
+
+6. 队长可以解散队伍 P0
+
+7. 分享队伍 ==> 邀请其他用户加入队伍 P1
+
+   1. 业务流程：
+
+      1. 生成分享链接（分享二维码）
+      2. 用户访问链接，可以点击加入
+
+8. 队伍人满后发送消息通知 P1
+
+#### **数据库表设计**
+
+队伍表：
+
+- id bigint 主键（最简单、连续，放 url 上比较简短，但缺点是爬虫）
+
+- name 队伍名称
+- description 描述 
+- maxNum 最大人数
+- expireTime 过期时间
+- userId 创建人 id
+- status 0 - 公开，1 - 私有，2 - 加密
+- password 密码
+- createTime 创建时间
+- updateTime 更新时间
+- isDelete 是否删除
+
+```sql
+DROP TABLE IF EXISTS team;
+create table team
+(
+    id          bigint auto_increment comment 'id' primary key,
+    name        varchar(256)                       not null comment '队伍名称',
+    description varchar(1024)                      null comment '描述',
+    maxNum      int      default 1                 not null comment '最大人数',
+    expireTime  datetime                           null comment '过期时间',
+    userId      bigint comment '用户id',
+    status      int      default 0                 not null comment '0 - 公开，1 - 私有，2 - 加密',
+    password    varchar(512)                       null comment '密码',
+    createTime  datetime default CURRENT_TIMESTAMP null comment '创建时间',
+    updateTime  datetime default CURRENT_TIMESTAMP null on update CURRENT_TIMESTAMP comment '更新时间',
+    isDeleted    tinyint  default 0                 not null comment '是否删除'
+)
+    comment '队伍';
+```
+
+用户 __ 队伍表 user_team
+
+字段：
+
+- id 主键
+- userId 用户 id
+- teamId 队伍 id
+- joinTime 加入时间
+- createTime 创建时间
+- updateTime 更新时间
+- isDelete 是否删除
+
+```sql
+DROP TABLE IF EXISTS user_team;
+create table user_team
+(
+    id         bigint auto_increment comment 'id' primary key,
+    userId     bigint comment '用户id',
+    teamId     bigint comment '队伍id',
+    joinTime   datetime                           null comment '加入时间',
+    createTime datetime default CURRENT_TIMESTAMP null comment '创建时间',
+    updateTime datetime default CURRENT_TIMESTAMP null on update CURRENT_TIMESTAMP,
+    isDeleted   tinyint  default 0                 not null comment '是否删除'
+)
+    comment '用户队伍关系';
+```
+
+两个关系：
+
+1. 用户加了哪些队伍？
+2. 队伍有哪些用户？
+
+方式：
+
+1. 建立用户 - 队伍关系表 teamId userId（便于修改，查询性能高一点，可以选择这个，不用全表遍历）
+2. 用户表补充已加入的队伍字段，队伍表补充已加入的用户字段（便于查询，不用写多对多的代码，可以直接根据队伍查用户、根据用户查队伍）
+
+#### MybatisX生成代码
+
+#### 系统（接口）设计
+
+##### 1、创建队伍
+
+用户可以 **创建** 一个队伍，设置队伍的人数、队伍名称（标题）、描述、超时时间 P0
+
+> 队长、剩余的人数
+>
+> 聊天？
+>
+> 公开 或 private 或加密
+>
+> 信息流中不展示已过期的队伍
+
+```java
+@Data
+public class TeamAddRequest {
+
+    private String name;
+
+    private String description;
+
+    private Integer maxNum;
+
+    private Date expireTime;
+
+    private Long userId;
+
+    private Integer status;
+
+    private String password;
+}
+```
+
+```java
+@PostMapping("/add")
+public Result addTeam(@RequestBody TeamAddRequest teamAddRequest, HttpServletRequest request) {
+    if (teamAddRequest == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR,"teamAddRequest空值");
+    }
+    Team team = BeanUtil.copyProperties(teamAddRequest, Team.class);
+    UserVO loginUser = userService.getLoginUser(request);
+    long teamId = teamService.addTeam(team, loginUser);
+    return Result.success(teamId);
+}
+```
+
+```java
+/**
+ * 创建队伍
+ * @param team
+ * @return
+ */
+long addTeam(Team team, UserVO loginUser);
+```
+
+```java
+@Override
+@Transactional(rollbackFor = Exception.class)
+public long addTeam(Team team, UserVO loginUser) {
+    //1. 请求参数是否为空？
+    if (team == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "team空值");
+    }
+    // 2. 是否登录，未登录不允许创建
+    if (loginUser == null) {
+        throw new BusinessException(ErrorCode.NO_LOGIN, "未登录");
+    }
+    // 3. 校验信息
+    //    1. 队伍人数 >= 1 且 <= 20
+    Integer maxNum = Optional.ofNullable(team.getMaxNum()).orElse(0);
+    if (maxNum < 1 || maxNum > 20) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍人数不满足要求");
+    }
+    //    2. 队伍标题 <= 20
+    String name = team.getName();
+    if (StringUtils.isBlank(name) || name.length() > 20) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍标题不满足要求");
+    }
+    //    3. 描述 <= 512
+    String description = team.getDescription();
+    if (description.length() > 512) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍描述过长");
+    }
+    //    4. status 是否公开（int）不传默认为 0（公开）
+    Integer status = Optional.ofNullable(team.getStatus()).orElse(0);
+    TeamStatusEnum statusEnum = TeamStatusEnum.getEnumByValue(status);
+    if (statusEnum == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍状态不满足要求");
+    }
+    //    5. 如果 status 是加密状态，一定要有密码，且密码 <= 32
+    String password = team.getPassword();
+    if (TeamStatusEnum.SECRET.equals(statusEnum) && (StringUtils.isBlank(password) || password.length() > 32)) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍密码设置不满足要求");
+    }
+    //    6. 超时时间 > 当前时间
+    Date expireTime = team.getExpireTime();
+    if (new Date().after(expireTime)) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍已过期");
+    }
+    //    7. 校验用户最多创建 5 个队伍
+    // todo 有bug，用户可能连续点100次，创建100个队伍 加分布式锁解决
+    LambdaQueryWrapper<Team> queryWrapper = new LambdaQueryWrapper<>();
+    Long userId = loginUser.getId();
+    queryWrapper.eq(Team::getUserId, userId);
+    long hasTeamNum = this.count(queryWrapper);
+    if (hasTeamNum >= 5) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "单个用户最多创建5个用户");
+    }
+    // 4. 插入队伍信息到队伍表
+    team.setUserId(userId);
+    boolean result = this.save(team);
+    Long teamId = team.getId();
+    if (!result || teamId == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "创建队伍失败");
+    }
+    // 5. 插入用户 -队伍关系到关系表
+    UserTeam userTeam = new UserTeam();
+    userTeam.setUserId(userId);
+    userTeam.setTeamId(teamId);
+    userTeam.setJoinTime(new Date());
+    result = userTeamService.save(userTeam);
+    if (!result) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "创建用户-队伍失败");
+    }
+    return teamId;
+}
+```
+
+##### 2、查询队伍列表
+
+分页展示队伍列表，根据名称、最大人数等搜索队伍  P0，信息流中不展示已过期的队伍
+
+1. 从请求参数中取出队伍名称等查询条件，如果存在则作为查询条件
+2. 不展示已过期的队伍（根据过期时间筛选）
+3. 可以通过某个**关键词**同时对名称和描述查询
+4. **只有管理员才能查看加密还有非公开的房间**
+5. 关联查询已加入队伍的用户信息
+6. **关联查询已加入队伍的用户信息（可能会很耗费性能，建议大家用自己写 SQL 的方式实现）**
+
+```java
+@Data
+@EqualsAndHashCode(callSuper = true)
+public class TeamQueryRequest extends PageRequest implements Serializable {
+
+    private Long id;
+
+    private String searchText;
+
+    private String name;
+
+    private String description;
+
+    private Integer maxNum;
+
+    private Date expireTime;
+
+    private Long userId;
+
+    private Integer status;
+
+}
+```
+
+```java
+@GetMapping("/list")
+public Result getTeamList(TeamQueryRequest teamQueryRequest,HttpServletRequest request) {
+    if (teamQueryRequest == null) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR, "队伍不存在");
+    }
+    boolean isAdmin = userService.isAdmin(request);
+    List<TeamUserVO> teamList = teamService.listTeams(teamQueryRequest,isAdmin);
+    return Result.success(teamList);
+}
+```
+
+```java
+/**
+ * 搜索队伍
+ * @param teamQueryRequest
+ * @param isAdmin
+ * @return
+ */
+List<TeamUserVO> listTeams(TeamQueryRequest teamQueryRequest, boolean isAdmin);
+```
+
+```java
+@Override
+public List<TeamUserVO> listTeams(TeamQueryRequest teamQueryRequest, boolean isAdmin) {
+    LambdaQueryWrapper<Team> teamWrapper = new LambdaQueryWrapper<>();
+    //组合队伍查询条件
+    if (teamQueryRequest != null) {
+        //根据队伍id查询
+        Long id = teamQueryRequest.getId();
+        teamWrapper.eq(id != null && id > 0, Team::getId, id);
+        //根据搜索内容查询
+        String searchText = teamQueryRequest.getSearchText();
+        teamWrapper.and(qw -> qw
+                .like(StringUtils.isNotBlank(searchText), Team::getName, searchText)
+                .or()
+                .like(StringUtils.isNotBlank(searchText), Team::getDescription, searchText));
+        //根据队伍名查询
+        String teamName = teamQueryRequest.getName();
+        teamWrapper.like(StringUtils.isNotBlank(teamName), Team::getName, teamName);
+        //根据队伍描述查询
+        String description = teamQueryRequest.getDescription();
+        teamWrapper.like(StringUtils.isNotBlank(description), Team::getDescription, description);
+        //根据队伍最大人数查询
+        Integer maxNum = teamQueryRequest.getMaxNum();
+        teamWrapper.eq(maxNum != null && maxNum > 0 && maxNum <= 20, Team::getMaxNum, maxNum);
+        //根据创建人id查询
+        Long userId = teamQueryRequest.getUserId();
+        teamWrapper.eq(userId != null && userId > 0, Team::getUserId, userId);
+        //不展示已过期队伍
+        teamWrapper.and(qw -> qw.isNull(Team::getExpireTime).or().gt(Team::getExpireTime, new Date()));
+        //根据队伍状态查询
+        Integer status = teamQueryRequest.getStatus();
+        TeamStatusEnum statusEnum = TeamStatusEnum.getEnumByValue(status);
+        if (statusEnum == null) {
+            statusEnum = TeamStatusEnum.PUBLIC;
+        }
+        if (!isAdmin && !statusEnum.equals(TeamStatusEnum.PUBLIC)) {
+            throw new BusinessException(ErrorCode.NO_AUTH,"无权限");
+        }
+        teamWrapper.eq(Team::getStatus, statusEnum.getValue());
+    }
+    //查询队伍
+    List<Team> teamList = this.list(teamWrapper);
+    if (CollectionUtil.isEmpty(teamList)) {
+        return new ArrayList<>();
+    }
+    //关联查询用户信息
+    List<TeamUserVO> teamUserVOList = new ArrayList<>();
+    //遍历所有队伍
+    for (Team team : teamList) {
+        TeamUserVO teamUserVO = BeanUtil.copyProperties(team, TeamUserVO.class);
+        //根据队伍id到用户-队伍表中查询队伍中有多少队员
+        LambdaQueryWrapper<UserTeam> userTeamWrapper = new LambdaQueryWrapper<>();
+        Long teamId = team.getId();
+        if (teamId == null) {
+            continue;
+        }
+        userTeamWrapper.eq(UserTeam::getTeamId, teamId);
+        List<UserTeam> userTeamList = userTeamService.list(userTeamWrapper);
+        //根据已查到的用户队伍关系记录中的userId查询队伍中的每个用户
+        List<UserVO> userVOList = new ArrayList<>();
+        for (UserTeam userTeam : userTeamList) {
+            LambdaQueryWrapper<User> userWrapper = new LambdaQueryWrapper<>();
+            Long userId = userTeam.getUserId();
+            if (userId == null) {
+                continue;
+            }
+            userWrapper.eq(User::getId, userId);
+            User user = userService.getOne(userWrapper);
+            //查询到地每个用户添加到teamUserVO的UserList中
+            if (user != null) {
+                userVOList.add(BeanUtil.copyProperties(user, UserVO.class));
+            }
+        }
+        //userVOList封装teamUserVO
+        teamUserVO.setUserList(userVOList);
+        //添加队伍信息到teamUserVOList
+        teamUserVOList.add(teamUserVO);
+    }
+    return teamUserVOList;
+}
+```
+
+**实现方式**
+
+1）自己写 SQL
+
+```sql
+// 1. 自己写 SQL
+// 查询队伍和创建人的信息
+select * from team t left join user u on t.userId = u.id
+// 查询队伍和已加入队伍成员的信息
+select * from team t 
+    left join user_team ut on t.id = ut.teamId 
+    left join user u on ut.userId = u.id;
+```
+
+
+
+##### 3. 修改队伍信息
+
+1. 判断请求参数是否为空
+2. 查询队伍是否存在
+3. 只有管理员或者队伍的创建者可以修改
+4. 如果用户传入的新值和老值一致，就不用 update 了（可自行实现，降低数据库使用次数）
+5. **如果队伍状态改为加密，必须要有密码**
+6. 更新成功
+
+```java
+@Data
+public class TeamUpdateRequest {
+
+    private Long id;
+
+    private String name;
+
+    private String description;
+
+    private Integer maxNum;
+
+    private Date expireTime;
+
+    private Integer status;
+
+    private String password;
+}
+```
+
+```java
+@PostMapping("/update")
+public Result updateTeam(@RequestBody TeamUpdateRequest teamUpdateRequest,HttpServletRequest request) {
+    if (teamUpdateRequest == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR,"teamUpdateRequest空值");
+    }
+    UserVO loginUser = userService.getLoginUser(request);
+    boolean result = teamService.updateTeam(teamUpdateRequest,loginUser);
+    if (!result) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR, "更新队伍失败");
+    }
+    return Result.success(true);
+}
+```
+
+```java
+/**
+ * 修改队伍
+ * @param teamUpdateRequest
+ * @param loginUser
+ * @return
+ */
+boolean updateTeam(TeamUpdateRequest teamUpdateRequest, UserVO loginUser);
+```
+
+```java
+@Override
+public boolean updateTeam(TeamUpdateRequest teamUpdateRequest, UserVO loginUser) {
+    if (teamUpdateRequest == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "teamUpdateRequest空值");
+    }
+    //查询队伍是否存在
+    Long id = teamUpdateRequest.getId();
+    if (id == null || id <= 0) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍不存在");
+    }
+    //查询数据库
+    Team dbTeam = this.getById(id);
+    if (dbTeam == null) {
+        throw new BusinessException(ErrorCode.NULL_ERROR, "队伍不存在");
+    }
+    //只有管理员或者创建人才能修改
+    if (loginUser.getId() != dbTeam.getUserId() && !userService.isAdmin(loginUser)) {
+        throw new BusinessException(ErrorCode.NO_AUTH, "无权限");
+    }
+    //用户如果修改的是公开队伍，密码不管有没有，都设置为空
+    TeamStatusEnum statusEnum = TeamStatusEnum.getEnumByValue(teamUpdateRequest.getStatus());
+    if (TeamStatusEnum.PUBLIC.equals(statusEnum)) {
+        teamUpdateRequest.setPassword("");
+    }
+    //如果修改的是加密队伍，密码不能为空
+    if (TeamStatusEnum.SECRET.equals(statusEnum)) {
+        if (StringUtils.isBlank(teamUpdateRequest.getPassword())) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "密码不能为空");
+        }
+    }
+    return this.updateById(BeanUtil.copyProperties(teamUpdateRequest, Team.class));
+}
+```
+
+##### 4. 用户可以加入队伍
+
+其他人、未满、未过期，允许加入多个队伍，但是要有个上限  P0
+
+1. 用户最多加入 5 个队伍
+2. 队伍必须存在，只能加入未满、未过期的队伍
+3. 不能重复加入已加入的队伍（幂等性）
+4. 禁止加入私有的队伍
+5. 如果加入的队伍是加密的，必须密码匹配才可以
+6. 新增队伍 - 用户关联信息
+
+**注意，一定要加上事务注解！！！！**
+
+```java
+@Data
+public class TeamJoinRequest {
+    private Long teamId;
+
+    private String password;
+
+}
+```
+
+```java
+@PostMapping("/join")
+public Result joinTeam(@RequestBody TeamJoinRequest teamJoinRequest,HttpServletRequest request){
+    if (teamJoinRequest==null){
+        throw new BusinessException(ErrorCode.PARAMS_ERROR,"teamJoinRequest空值");
+    }
+    UserVO loginUser = userService.getLoginUser(request);
+    boolean result=teamService.joinTeam(teamJoinRequest,loginUser);
+    if (!result){
+        throw new BusinessException(ErrorCode.PARAMS_ERROR,"加入队伍失败");
+    }
+    
+    return Result.success(true);
+}
+```
+
+```java
+/**
+ * 加入队伍
+ * @param teamJoinRequest
+ * @param loginUser
+ * @return
+ */
+boolean joinTeam(TeamJoinRequest teamJoinRequest, UserVO loginUser);
+```
+
+```java
+@Override
+public boolean joinTeam(TeamJoinRequest teamJoinRequest, UserVO loginUser) {
+    if (teamJoinRequest == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "teamJoinRequest空值");
+    }
+    //加入的队伍必须要存在
+    Long teamId = teamJoinRequest.getTeamId();
+    LambdaQueryWrapper<Team> TeamWrapper = new LambdaQueryWrapper<>();
+    TeamWrapper.eq(teamId != null && teamId > 0, Team::getId, teamId);
+    Team team = this.getOne(TeamWrapper);
+    if (team == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍不存在");
+    }
+    //只能加入未过期的队伍
+    if (team.getExpireTime() != null && new Date().after(team.getExpireTime())) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍已过期");
+    }
+    //不能加入私有队伍
+    TeamStatusEnum statusEnum = TeamStatusEnum.getEnumByValue(team.getStatus());
+    if (TeamStatusEnum.PRIVATE.equals(statusEnum)) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "不能加入私有队伍");
+    }
+    //加入加密队伍，密码必须匹配
+    if (TeamStatusEnum.SECRET.equals(statusEnum)) {
+        String password = teamJoinRequest.getPassword();
+        if (StringUtils.isBlank(password) || !StringUtils.equals(team.getPassword(), password)) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍密码错误");
+        }
+    }
+    //该用户已加入队伍的数量
+    Long userId = loginUser.getId();
+    LambdaQueryWrapper<UserTeam> userTeamWrapper = new LambdaQueryWrapper<>();
+    userTeamWrapper.eq(userId != null && userId > 0, UserTeam::getUserId, userId);
+    long count = userTeamService.count(userTeamWrapper);
+    if (count >= 5) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "最多同时加入5个队伍");
+    }
+    //只能加入未满的队伍
+    userTeamWrapper = new LambdaQueryWrapper<>();
+    userTeamWrapper.eq(teamId != null && teamId > 0, UserTeam::getTeamId, teamId);
+    count = userTeamService.count(userTeamWrapper);
+    if (count == team.getMaxNum()) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍人数已满");
+    }
+    //不能重复加入已加入的队伍
+    userTeamWrapper = new LambdaQueryWrapper<>();
+    userTeamWrapper.eq(userId != null && userId > 0, UserTeam::getUserId, userId);
+    userTeamWrapper.eq(teamId != null && teamId > 0, UserTeam::getTeamId, teamId);
+    count = userTeamService.count(userTeamWrapper);
+    if (count > 0) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "不能重复加入已加入的队伍");
+    }
+    //新增用户-关系表信息
+    UserTeam userTeam = new UserTeam();
+    userTeam.setUserId(userId);
+    userTeam.setTeamId(teamId);
+    userTeam.setJoinTime(new Date());
+    boolean result = userTeamService.save(userTeam);
+    return result;
+}
+```
+
+##### 5. 用户可以退出队伍
+
+请求参数：队伍 id
+
+1. 校验请求参数
+
+2. 校验队伍是否存在
+
+3. 校验我是否已加入队伍
+
+4. 如果队伍
+
+   1. 只剩一人，队伍解散
+
+   2. 还有其他人
+
+      1. 如果是队长退出队伍，权限转移给第二早加入的用户 —— 先来后到
+
+         > 只用取 id 最小的 2 条数据
+
+      2. 非队长，自己退出队伍
+
+
+
+##### 6. 队长可以解散队伍
+
+请求参数：队伍 id
+
+业务流程：
+
+1. 校验请求参数
+2. 校验队伍是否存在
+3. 校验你是不是队伍的队长
+4. 移除所有加入队伍的关联信息
+5. 删除队伍
+
+
+
+##### 7. 获取当前用户已加入的队伍
+
+##### 8. 获取当前用户创建的队伍
+
+复用 listTeam 方法，只新增查询条件，不做修改（开闭原则）
+
+
+
+---
+
+
+
+####  事务注解
+
+@Transactional(rollbackFor = Exception.class)
+
+要么数据操作都成功，要么都失败
+
+
+
+
+
+
+
+
+
+
 
 ## 前端开发
 
@@ -1184,6 +1846,10 @@ my_axios.get('/user/searchByTags', {
 ![image-20230921155345911](assets/image-20230921155345911.png)
 
 ![image-20230921155757224](assets/image-20230921155757224.png)
+
+### 组队
+
+
 
 ## 数据库查询慢怎么办？
 
