@@ -893,13 +893,13 @@ public Result usersRecommend(long currentPage, long pageSize, HttpServletRequest
 
 2. 展示队伍列表，根据名称搜索队伍  P0，信息流中不展示已过期的队伍 P0
 
-3. 修改队伍信息 P0 ~ P1
+3. 修改队伍信息 P0
 
 4. 用户可以加入其他人的队伍（未满、未过期），允许加入多个队伍，但是要有个上限  P0
 
    > 是否需要队长同意？筛选审批？
 
-5. 用户可以退出队伍（如果队长退出，权限转移给第二早加入的用户 —— 先来后到） P1
+5. 用户可以退出队伍（如果队长退出，权限转移给第二早加入的用户 —— 先来后到） P0
 
 6. 队长可以解散队伍 P0
 
@@ -938,7 +938,7 @@ create table team
     description varchar(1024)                      null comment '描述',
     maxNum      int      default 1                 not null comment '最大人数',
     expireTime  datetime                           null comment '过期时间',
-    userId      bigint comment '用户id',
+    userId      bigint comment '用户id (队长 id) ',
     status      int      default 0                 not null comment '0 - 公开，1 - 私有，2 - 加密',
     password    varchar(512)                       null comment '密码',
     createTime  datetime default CURRENT_TIMESTAMP null comment '创建时间',
@@ -1001,6 +1001,19 @@ create table user_team
 >
 > 信息流中不展示已过期的队伍
 
+1. 请求参数是否为空？
+2. 是否登录，未登录不允许创建
+3. 校验信息
+   1. 队伍人数 > 1 且 <= 10
+   2. 队伍标题 <= 20
+   3. 描述 <= 512
+   4. status 是否公开（int）不传默认为 0（公开）
+   5. 如果 status 是加密状态，一定要有密码，且密码 <= 32
+   6. 超时时间 > 当前时间
+   7. 校验用户最多创建 5 个队伍
+4. 插入队伍信息到队伍表
+5. 插入用户  => 队伍关系到关系表
+
 ```java
 @Data
 public class TeamAddRequest {
@@ -1056,9 +1069,9 @@ public long addTeam(Team team, UserVO loginUser) {
         throw new BusinessException(ErrorCode.NO_LOGIN, "未登录");
     }
     // 3. 校验信息
-    //    1. 队伍人数 >= 1 且 <= 20
+    //    1. 队伍人数 > 1 且 <= 10
     Integer maxNum = Optional.ofNullable(team.getMaxNum()).orElse(0);
-    if (maxNum < 1 || maxNum > 20) {
+    if (maxNum <= 1 || maxNum > 10) {
         throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍人数不满足要求");
     }
     //    2. 队伍标题 <= 20
@@ -1371,6 +1384,8 @@ public boolean updateTeam(TeamUpdateRequest teamUpdateRequest, UserVO loginUser)
 5. 如果加入的队伍是加密的，必须密码匹配才可以
 6. 新增队伍 - 用户关联信息
 
+> 注意：并发请求时可能出现问题
+
 **注意，一定要加上事务注解！！！！**
 
 ```java
@@ -1482,17 +1497,126 @@ public boolean joinTeam(TeamJoinRequest teamJoinRequest, UserVO loginUser) {
 
 3. 校验我是否已加入队伍
 
-4. 如果队伍
+4. 退出队伍
 
-   1. 只剩一人，队伍解散
+   1. 如果队伍只剩一人，队伍解散
 
-   2. 还有其他人
+   2. 如果队伍还有其他人 
 
       1. 如果是队长退出队伍，权限转移给第二早加入的用户 —— 先来后到
 
          > 只用取 id 最小的 2 条数据
 
       2. 非队长，自己退出队伍
+
+```java
+@Data
+public class TeamQuitRequest {
+    private Long teamId;
+}
+```
+
+```java
+@PostMapping("/quit")
+public Result quitTeam(@RequestBody TeamQuitRequest teamQuitRequest, HttpServletRequest request) {
+    if (teamQuitRequest == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR,"teamQuitRequest空值");
+    }
+    UserVO loginUser = userService.getLoginUser(request);
+    boolean result=teamService.quitTeam(teamQuitRequest,loginUser);
+    if (!result){
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "退出队伍失败");
+    }
+    return Result.success(true);
+}
+```
+
+```java
+/**
+ * 退出队伍
+ * @param teamQuitRequest
+ * @param loginUser
+ * @return
+ */
+boolean quitTeam(TeamQuitRequest teamQuitRequest, UserVO loginUser);
+```
+
+```java
+@Override
+@Transactional(rollbackFor = Exception.class)
+public boolean quitTeam(TeamQuitRequest teamQuitRequest, UserVO loginUser) {
+    //1. 校验请求参数
+    if (teamQuitRequest == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "teamQuitRequest空值");
+    }
+    // 2. 校验队伍是否存在
+    Long teamId = teamQuitRequest.getTeamId();
+    if (teamId == null || teamId <= 0) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍不存在");
+    }
+    Team team = this.getById(teamId);
+    if (team == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍不存在");
+    }
+    // 3. 校验我是否已加入队伍
+    Long userId = loginUser.getId();
+    LambdaQueryWrapper<UserTeam> userTeamWrapper = new LambdaQueryWrapper<>();
+    userTeamWrapper.eq(userId != null && userId > 0, UserTeam::getUserId, userId);
+    userTeamWrapper.eq(UserTeam::getTeamId, teamId);
+    long count = userTeamService.count(userTeamWrapper);
+    if (count == 0) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "非队伍成员");
+    }
+    //查询队伍人数
+    count = countTeamUserByTeamId(teamId);
+    //4.退出队伍
+    if (count == 1) {
+        //4.1.退出队伍只剩一人，队伍解散
+        //删除队伍
+        this.removeById(teamId);
+    } else {
+        //4.2. 退出队伍还有其他人
+        //如果是队长退出队伍，权限转移给第二早加入的用户 —— 先来后到
+        if (team.getUserId().equals(userId)) {
+            //取 id 最小的 2 条数据
+            userTeamWrapper = new LambdaQueryWrapper<>();
+            userTeamWrapper.eq(UserTeam::getTeamId, teamId);
+            userTeamWrapper.last("order by id asc limit 2");
+            List<UserTeam> userTeamList = userTeamService.list(userTeamWrapper);
+            if (CollectionUtil.isEmpty(userTeamList) || userTeamList.size() <= 1) {
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR);
+            }
+            //取出第二早加入队伍的用户
+            UserTeam nextUserTeam = userTeamList.get(1);
+            Long nextTeamLeaderId = nextUserTeam.getUserId();
+            //更新当前队伍的队长
+            Team updateTeam = new Team();
+            updateTeam.setId(teamId);
+            updateTeam.setUserId(nextTeamLeaderId);
+            boolean result = this.updateById(updateTeam);
+            if (!result) {
+                throw new BusinessException(ErrorCode.SYSTEM_ERROR, "更新队长失败");
+            }
+        }
+    }
+    //删除当前用户的用户-队伍关系，不管是一个人，队长，非队长，只要调用这个方法都要移除用户-队伍关系
+    userTeamWrapper = new LambdaQueryWrapper<>();
+    userTeamWrapper.eq(UserTeam::getTeamId, teamId);
+    userTeamWrapper.eq(userId != null && userId > 0, UserTeam::getUserId, userId);
+    return userTeamService.remove(userTeamWrapper);
+}
+/**
+ * 根据队伍id查询用户关系表，获取队伍人数
+ *
+ * @param teamId
+ * @return
+ */
+private long countTeamUserByTeamId(Long teamId) {
+    LambdaQueryWrapper<UserTeam> userTeamWrapper = new LambdaQueryWrapper<>();
+    userTeamWrapper.eq(UserTeam::getTeamId, teamId);
+    return userTeamService.count(userTeamWrapper);
+}
+```
 
 
 
@@ -1508,15 +1632,150 @@ public boolean joinTeam(TeamJoinRequest teamJoinRequest, UserVO loginUser) {
 4. 移除所有加入队伍的关联信息
 5. 删除队伍
 
+```java
+@Data
+public class TeamDeleteRequest {
+    private Long teamId;
+}
+```
 
+```java
+@PostMapping("/delete")
+public Result deleteTeam(@RequestBody TeamDeleteRequest teamDeleteRequest, HttpServletRequest request) {
+    if (teamDeleteRequest == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "teamDeleteRequestko空值");
+    }
+    UserVO loginUser = userService.getLoginUser(request);
+    boolean result = teamService.deleteTeam(teamDeleteRequest,loginUser);
+    if (!result) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR, "队长解散队伍失败");
+    }
+    return Result.success(true);
+}
+```
+
+```java
+/**
+ * 队长解散队伍
+ *
+ * @param teamDeleteRequest
+ * @param loginUser
+ * @return
+ */
+boolean deleteTeam(TeamDeleteRequest teamDeleteRequest, UserVO loginUser);
+```
+
+```java
+@Override
+@Transactional(rollbackFor = Exception.class)
+public boolean deleteTeam(TeamDeleteRequest teamDeleteRequest, UserVO loginUser) {
+    //1. 校验请求参数
+    if (teamDeleteRequest == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "teamDeleteRequestko空值");
+    }
+    // 2. 校验队伍是否存在
+    Long teamId = teamDeleteRequest.getTeamId();
+    Team team = getTeamById(teamId);
+    // 3. 校验你是不是队伍的队长
+    if (!team.getUserId().equals(loginUser.getId())) {
+        throw new BusinessException(ErrorCode.NO_AUTH, "非队长无权解散队伍");
+    }
+    // 4. 移除所有加入队伍的关联信息
+    LambdaQueryWrapper<UserTeam> userTeamWrapper = new LambdaQueryWrapper<>();
+    userTeamWrapper.eq(UserTeam::getTeamId, teamId);
+    boolean result = userTeamService.remove(userTeamWrapper);
+    if (!result) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR, "移除所有加入队伍的关联信息失败");
+    }
+    // 5. 删除队伍
+    result = this.removeById(teamId);
+    if (!result) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR, "删除队伍失败");
+    }
+    return true;
+}
+/**
+ * 根据teamId查询team
+ *
+ * @param teamId
+ * @return
+ */
+private Team getTeamById(Long teamId) {
+    if (teamId == null || teamId <= 0) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍不存在");
+    }
+    Team team = this.getById(teamId);
+    if (team == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍不存在");
+    }
+    return team;
+}
+```
 
 ##### 7. 获取当前用户已加入的队伍
+
+```java
+/**
+ * 获取我加入的队伍
+ * @param teamQueryRequest
+ * @param request
+ * @return
+ */
+@GetMapping("/list/mine/join")
+public Result getMyJoinTeamList(TeamQueryRequest teamQueryRequest, HttpServletRequest request) {
+    if (teamQueryRequest == null) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR, "队伍不存在");
+    }
+    //获取当前登录用户
+    UserVO loginUser = userService.getLoginUser(request);
+    //根据登录用户id查询该用户的用户-队伍关系
+    LambdaQueryWrapper<UserTeam> userTeamWrapper=new LambdaQueryWrapper<>();
+    userTeamWrapper.eq(UserTeam::getUserId,loginUser.getId());
+    List<UserTeam> userTeamList = userTeamService.list(userTeamWrapper);
+    //把用户-队伍关系根据队伍id分组，得到队伍-用户的映射map
+    Map<Long, List<UserTeam>> listMap = userTeamList.stream().collect(Collectors.groupingBy(UserTeam::getTeamId));
+    //从map中取出的keySet就是当前用户加入的队伍id列表
+    ArrayList<Long> teamIdList = new ArrayList<>(listMap.keySet());
+    //设置队伍id列表
+    teamQueryRequest.setIds(teamIdList);
+    //根据队伍id列表查询当前用户加入的队伍
+    List<TeamUserVO> teamList = teamService.listTeams(teamQueryRequest, true);
+    return Result.success(teamList);
+}
+```
 
 ##### 8. 获取当前用户创建的队伍
 
 复用 listTeam 方法，只新增查询条件，不做修改（开闭原则）
 
+```java
+/**
+ * 获取我创建的队伍
+ * @param teamQueryRequest
+ * @param request
+ * @return
+ */
+@GetMapping("/list/mine/create")
+public Result getMyCreateTeamList(TeamQueryRequest teamQueryRequest, HttpServletRequest request) {
+    if (teamQueryRequest == null) {
+        throw new BusinessException(ErrorCode.SYSTEM_ERROR, "队伍不存在");
+    }
+    //获取当前登录用户
+    UserVO loginUser = userService.getLoginUser(request);
+    //设置登录用户id
+    teamQueryRequest.setUserId(loginUser.getId());
+    //根据登录用户id查询该用户创建的队伍
+    List<TeamUserVO> teamList = teamService.listTeams(teamQueryRequest, true);
+    return Result.success(teamList);
+}
+```
 
+##### 9. 分享队伍 ==> 邀请其他用户加入队伍 
+
+1. 业务流程：
+
+   1. 生成分享链接（分享二维码）
+   2. 用户访问链接，可以点击加入
 
 ---
 
@@ -1848,6 +2107,145 @@ my_axios.get('/user/searchByTags', {
 ![image-20230921155757224](assets/image-20230921155757224.png)
 
 ### 组队
+
+#### 改造个人页
+
+1. 
+
+![image-20230929192911992](assets/image-20230929192911992.png)
+
+2. 选择组件
+
+![image-20230929182952997](assets/image-20230929182952997.png)
+
+![image-20230929193237288](assets/image-20230929193237288.png)
+
+ #### 创建队伍
+
+1. 选择组件
+
+![image-20230929160137052](assets/image-20230929160137052.png)
+
+![image-20230929160256427](assets/image-20230929160256427.png)
+
+![image-20230929160328303](assets/image-20230929160328303.png)
+
+2. 引入组件
+
+```ts
+app.use(Stepper);
+app.use(Radio);
+app.use(RadioGroup);
+app.use(Picker);
+app.use(DatetimePicker);
+app.use(Popup);
+```
+
+3. 修改队伍页
+
+![image-20230929162758781](assets/image-20230929162758781.png)
+
+3. 添加路由
+
+![image-20230929160620727](assets/image-20230929160620727.png)
+
+![image-20230929143419028](assets/image-20230929143419028.png)
+
+5. 开发页面
+
+![image-20230929160808100](assets/image-20230929160808100.png)
+
+![image-20230929161058655](assets/image-20230929161058655.png)
+
+![image-20230929161148642](assets/image-20230929161148642.png)
+
+![image-20230929161230574](assets/image-20230929161230574.png)
+
+![image-20230929161458754](assets/image-20230929161458754.png)
+
+![image-20230929161731336](assets/image-20230929161731336.png)
+
+#### 展示队伍&加入队伍
+
+1. 封装队伍列表组件
+
+![image-20230929162218716](assets/image-20230929162218716.png)
+
+![image-20230929162347552](assets/image-20230929162347552.png)
+
+2. 修改队伍页面
+
+![image-20230929162525542](assets/image-20230929162525542.png)
+
+3. 封装队伍类型
+
+![image-20230929163053782](assets/image-20230929163053782.png)
+
+4. 封装队伍状态枚举对象
+
+![image-20230929163133640](assets/image-20230929163133640.png)
+
+#### 搜索队伍
+
+1. 选择组件
+
+![image-20230929163238705](assets/image-20230929163238705.png)
+
+2. 开发页面
+
+![image-20230929165407905](assets/image-20230929165407905.png)
+
+![image-20230929165531651](assets/image-20230929165531651.png)
+
+![image-20230929165604236](assets/image-20230929165604236.png)
+
+#### 更新队伍
+
+1. 点击更新队伍获取队伍id
+
+![image-20230929184112208](assets/image-20230929184112208.png)
+
+![image-20230929184223485](assets/image-20230929184223485.png)
+
+![image-20230929184306701](assets/image-20230929184306701.png)
+
+2. 更新队伍
+
+![image-20230929184612001](assets/image-20230929184612001.png)
+
+![image-20230929184704538](assets/image-20230929184704538.png)
+
+3. 添加路由
+
+![image-20230929184801831](assets/image-20230929184801831.png)
+
+#### 查看创建的队伍
+
+1. 复制页面
+
+![image-20230929193841009](assets/image-20230929193841009.png)
+
+2. 添加路由
+
+![image-20230929193513004](assets/image-20230929193513004.png)
+
+#### 查看加入的队伍
+
+1. 复制页面
+
+![image-20230929193431796](assets/image-20230929193431796.png)
+
+![image-20230929193446496](assets/image-20230929193446496.png)
+
+2. 添加路由
+
+![image-20230929193658289](assets/image-20230929193658289.png)
+
+#### 解散队伍&退出队伍
+
+![image-20230929200329839](assets/image-20230929200329839.png)
+
+![image-20230929200404531](assets/image-20230929200404531.png)
 
 
 
