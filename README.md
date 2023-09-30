@@ -777,93 +777,93 @@ public Result usersRecommend(long currentPage, long pageSize, HttpServletRequest
 }
 ```
 
-2. 导入数据
+####  导入数据
 
 1. 用可视化界面：适合一次性导入、数据量可控
 
+2. 写程序：for 循环，建议分批，（可以用接口来控制）**要保证可控、幂等，注意线上环境和测试环境是有区别的**
+   1. 批量查询解决每次插入会建立和释放数据库链接的问题
 
-   2. 写程序：for 循环，建议分批，（可以用接口来控制）**要保证可控、幂等，注意线上环境和测试环境是有区别的**
 
-      1. 批量查询解决每次插入会建立和释放数据库链接的问题
+```java
+//在测试里执行完后一定要删除，不然会影响线上环境
+@Test
+public void doInsertUsers() {
+    StopWatch stopWatch = new StopWatch();
+    stopWatch.start();
+    final int Insert_Num = 1000;
+    List<User> userList = new ArrayList<>();
+    for (int i = 0; i < Insert_Num; i++) {
+        User user = new User();
+        user.setUserAccount("fakeUser" + i);
+        user.setUsername("fakeUser" + i);
+        user.setAvatarUrl("https://thirdwx.qlogo.cn/mmopen/vi_32/RNJfsfhsEic2dzoJasQgMoHjw0h5580v6aQ5OOCHM0Fk8B3Fw98CWmZlbqcx8LLDEKunkZnwU5aEliaKhic8MFOYQ/132");
+        user.setGender(0);
+        user.setUserPassword("0123456789");
+        user.setPhone("123");
+        user.setEmail("123@qq.com");
+        user.setUserStatus(0);
+        user.setUserRole(0);
+        user.setAuthCode("66666");
+        user.setTags("[]");
+        user.setProfile("精神小伙");
+        userList.add(user);
+    }
+    userService.saveBatch(userList,100);
+    stopWatch.stop();
+    System.out.println(stopWatch.getTotalTimeMillis());
+}
+```
 
-      ```java
-      //在测试里执行完后一定要删除，不然会影响线上环境
-      @Test
-      public void doInsertUsers() {
-          StopWatch stopWatch = new StopWatch();
-          stopWatch.start();
-          final int Insert_Num = 1000;
-          List<User> userList = new ArrayList<>();
-          for (int i = 0; i < Insert_Num; i++) {
-              User user = new User();
-              user.setUserAccount("fakeUser" + i);
-              user.setUsername("fakeUser" + i);
-              user.setAvatarUrl("https://thirdwx.qlogo.cn/mmopen/vi_32/RNJfsfhsEic2dzoJasQgMoHjw0h5580v6aQ5OOCHM0Fk8B3Fw98CWmZlbqcx8LLDEKunkZnwU5aEliaKhic8MFOYQ/132");
-              user.setGender(0);
-              user.setUserPassword("0123456789");
-              user.setPhone("123");
-              user.setEmail("123@qq.com");
-              user.setUserStatus(0);
-              user.setUserRole(0);
-              user.setAuthCode("66666");
-              user.setTags("[]");
-              user.setProfile("精神小伙");
-              userList.add(user);
-          }
-          userService.saveBatch(userList,100);
-          stopWatch.stop();
-          System.out.println(stopWatch.getTotalTimeMillis());
-      }
-      ```
+2. 并发插入数据
 
-      2. 并发插入数据
+```java
+private ExecutorService executorService= new ThreadPoolExecutor(
+        60,1000,100000, TimeUnit.SECONDS,new ArrayBlockingQueue<>(10000));
+@Test
+public void doConcurrencyInsertUsers() {
+    StopWatch stopWatch = new StopWatch();
+    stopWatch.start();
+    int batchSize = 25000;
+    List<CompletableFuture<Void>> futureList=new ArrayList<>();
+    //分十组，每组100000条
+    int j=0;
+    for (int i = 0; i < 10; i++) {
+        List<User> userList = new ArrayList<>();
+        while(true) {
+            j++;
+            if (j%100000==0){
+                break;
+            }
+            User user = new User();
+            user.setUserAccount("fakeUser" + j);
+            user.setUsername("fakeUser" + j);
+            user.setAvatarUrl("https://thirdwx.qlogo.cn/mmopen/vi_32/RNJfsfhsEic2dzoJasQgMoHjw0h5580v6aQ5OOCHM0Fk8B3Fw98CWmZlbqcx8LLDEKunkZnwU5aEliaKhic8MFOYQ/132");
+            user.setGender(0);
+            user.setUserPassword("0123456789");
+            user.setPhone("123");
+            user.setEmail("123@qq.com");
+            user.setUserStatus(0);
+            user.setUserRole(0);
+            user.setAuthCode("66666");
+            user.setTags("[]");
+            user.setProfile("精神小伙");
+            userList.add(user);
+        }
+        CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+            System.out.println("ThreadName===>"+Thread.currentThread().getName());
+            userService.saveBatch(userList, batchSize);
+        },executorService);
+        futureList.add(future);
+    }
+    CompletableFuture.allOf(futureList.toArray(new CompletableFuture[]{})).join();
+    stopWatch.stop();
+    System.out.println(stopWatch.getTotalTimeMillis());
+}
+```
 
-      ```java
-      private ExecutorService executorService= new ThreadPoolExecutor(
-              60,1000,100000, TimeUnit.SECONDS,new ArrayBlockingQueue<>(10000));
-      @Test
-      public void doConcurrencyInsertUsers() {
-          StopWatch stopWatch = new StopWatch();
-          stopWatch.start();
-          int batchSize = 25000;
-          List<CompletableFuture<Void>> futureList=new ArrayList<>();
-          //分十组，每组100000条
-          int j=0;
-          for (int i = 0; i < 10; i++) {
-              List<User> userList = new ArrayList<>();
-              while(true) {
-                  j++;
-                  if (j%100000==0){
-                      break;
-                  }
-                  User user = new User();
-                  user.setUserAccount("fakeUser" + j);
-                  user.setUsername("fakeUser" + j);
-                  user.setAvatarUrl("https://thirdwx.qlogo.cn/mmopen/vi_32/RNJfsfhsEic2dzoJasQgMoHjw0h5580v6aQ5OOCHM0Fk8B3Fw98CWmZlbqcx8LLDEKunkZnwU5aEliaKhic8MFOYQ/132");
-                  user.setGender(0);
-                  user.setUserPassword("0123456789");
-                  user.setPhone("123");
-                  user.setEmail("123@qq.com");
-                  user.setUserStatus(0);
-                  user.setUserRole(0);
-                  user.setAuthCode("66666");
-                  user.setTags("[]");
-                  user.setProfile("精神小伙");
-                  userList.add(user);
-              }
-              CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                  System.out.println("ThreadName===>"+Thread.currentThread().getName());
-                  userService.saveBatch(userList, batchSize);
-              },executorService);
-              futureList.add(future);
-          }
-          CompletableFuture.allOf(futureList.toArray(new CompletableFuture[]{})).join();
-          stopWatch.stop();
-          System.out.println(stopWatch.getTotalTimeMillis());
-      }
-      ```
-      
-   3. 执行 SQL 语句：适用于小数据量
+
+      2. 执行 SQL 语句：适用于小数据量
 
 并发要注意执行的先后顺序无所谓，不要用到非并发类的集合
 
@@ -1789,14 +1789,6 @@ public Result getMyCreateTeamList(TeamQueryRequest teamQueryRequest, HttpServlet
 
 
 
-
-
-
-
-
-
-
-
 ## 前端开发
 
 ### 整合路由
@@ -2662,9 +2654,282 @@ https://blog.csdn.net/qq_26222859/article/details/79645203
 
 ---
 
-
-
 Zookeeper 实现（不推荐）
 
+## 随机匹配
 
 
+
+**前端不同页面怎么传递数据**？
+
+1. **url querystring（xxx?id=1）** 比较适用于页面跳转
+2. **url（/team/:id，xxx/1）**
+3. hash (/team#1)
+4. localStorage
+5. **context（全局变量，同页面或整个项目要访问公共变量）**
+
+
+
+### 随机匹配后端
+
+> 为了帮大家更快地发现和自己兴趣相同的朋友
+
+匹配 1 个还是匹配多个？
+
+答：匹配多个，并且按照匹配的相似度从高到低排序
+
+怎么匹配？（根据什么匹配）
+
+答：标签 tags
+
+> 还可以根据 user_team 匹配加入相同队伍的用户
+
+本质：找到有相似标签的用户
+
+#### 1. 怎么匹配
+
+1. 找到有共同标签最多的用户（TopN）
+2. 共同标签越多，分数越高，越排在前面
+3. 如果没有匹配的用户，随机推荐几个（降级方案）
+
+编辑距离算法：https://blog.csdn.net/DBC_121/article/details/104198838
+
+> 最小编辑距离：字符串 1 通过最少多少次增删改字符的操作可以变成字符串 2
+
+```java
+/**
+ * 编辑距离算法（用于计算最相似的两个标签列表）标签列表的每个标签字符串，相当于算法修改前字符串的每个字符
+ * 原理: https://blog.csdn.net/DBC_121/article/details/104198838
+ *
+ * @param tagList1
+ * @param tagList2
+ * @return
+ */
+public static int minDistance1(List<String> tagList1, List<String> tagList2) {
+    int n = tagList1.size();
+    int m = tagList2.size();
+    if (n * m == 0)
+        return n + m;
+    int[][] d = new int[n + 1][m + 1];
+    for (int i = 0; i < n + 1; i++) {
+        d[i][0] = i;
+    }
+    for (int j = 0; j < m + 1; j++) {
+        d[0][j] = j;
+    }
+    for (int i = 1; i < n + 1; i++) {
+        for (int j = 1; j < m + 1; j++) {
+            int left = d[i - 1][j] + 1;
+            int down = d[i][j - 1] + 1;
+            int left_down = d[i - 1][j - 1];
+            if (!tagList1.get(i - 1).equals(tagList2.get(j - 1))) {
+                left_down += 1;
+            }
+            d[i][j] = Math.min(left, Math.min(down, left_down));
+        }
+    }
+    return d[n][m];
+}
+```
+
+余弦相似度算法：https://blog.csdn.net/m0_55613022/article/details/125683937（如果需要带权重计算，比如学什么方向最重要，性别相对次要）
+
+
+
+#### 2. 怎么对所有用户匹配，取 TOP
+
+直接取出所有用户，依次和当前用户计算分数，取 TOP N（54 秒）
+
+优化方法：
+
+1. 切忌不要在数据量大的时候循环输出日志（取消掉日志后 20 秒）
+
+2. Map 存了所有的分数信息，占用内存
+
+   解决：维护一个固定长度的有序集合（sortedSet），只保留分数最高的几个用户（时间换空间）（暂未使用）
+
+   e.g.【3, 4, 5, 6, 7】取 TOP 5，分数为 1 的用户就不用放进去了
+
+3. 细节：剔除自己 √
+
+4. 尽量只查需要的数据：
+
+   1. 过滤掉标签为空的用户 √
+   2. 根据部分标签取用户（前提是能区分出来哪个标签比较重要）
+   3. 只查需要的数据（比如 id 和 tags） √（7.0s）
+
+5. 提前查？（定时任务）
+
+   1. 提前把所有用户给缓存（不适用于经常更新的数据）
+   2. 提前运算出来结果，缓存（针对一些重点用户，提前缓存）
+
+```java
+/**
+ * 获取与当前用户相似度最高的用户
+ * @param num 需要匹配用户的个数
+ * @param request
+ * @return
+ */
+@GetMapping("/match")
+public Result usersMatch(long num, HttpServletRequest request) {
+    if (num<=0 || num >20){
+        throw new BusinessException(ErrorCode.PARAMS_ERROR);
+    }
+    //获取登录用户
+    UserVO loginUser = userService.getLoginUser(request);
+    //封装返回匹配的用户
+    return Result.success(userService.usersMatch(num,loginUser));
+}
+```
+
+```java
+/**
+ * 获取与当前用户相似度最高的用户
+ * @param num
+ * @param loginUser
+ * @return
+ */
+List<UserVO> usersMatch(long num, UserVO loginUser);
+```
+
+```java
+@Override
+public List<UserVO> usersMatch(long num, UserVO loginUser) {
+    //获取当前用户的标签列表
+    String loginUserTags = loginUser.getTags();
+    Gson gson = new Gson();
+    //把当前用户的标签列表转换成List集合
+    List<String> loginUserTagList = gson.fromJson(loginUserTags, new TypeToken<List<String>>() {
+    }.getType());
+    //查询所有标签字段不为空的用户，且只查用id和tags字段
+    LambdaQueryWrapper<User> userWrapper = new LambdaQueryWrapper<>();
+    userWrapper.select(User::getId, User::getTags);
+    userWrapper.isNotNull(User::getTags);
+    List<User> users = this.list(userWrapper);
+    //用户==>相似度
+    List<Pair<User, Long>> list = new ArrayList<>();
+    //遍历查到的每个用户
+    for (User user : users) {
+        //获取用户的标签
+        String userTags = user.getTags();
+        //过滤掉无标签的用户和当前用户
+        if (StringUtils.isBlank(userTags) || user.getId().equals(loginUser.getId())) {
+            continue;
+        }
+        //把用户的标签列表转换成List集合
+        List<String> userTagList = gson.fromJson(userTags, new TypeToken<List<String>>() {
+        }.getType());
+        //使用编辑距离算法，计算出每个用户的标签和当前用户的标签的编辑距离
+        long distance = AlgorithmUtil.minDistance1(loginUserTagList, userTagList);
+        //存到list集合中
+        list.add(new Pair<>(user, distance));
+    }
+    //按编辑距离升序排序
+    List<Pair<User, Long>> topUserPairList = list.stream()
+            .sorted((p1, p2) -> (int) (p1.getValue() - p2.getValue()))
+            .limit(num).collect(Collectors.toList());
+    //从topUserPairList取出userId
+    List<Long> userIdList = topUserPairList.stream()
+            .map(pair -> pair.getKey().getId())
+            .collect(Collectors.toList());
+    userWrapper = new LambdaQueryWrapper<>();
+    userWrapper.in(User::getId,userIdList);
+    //根据userId查询用户，然后返回
+    Map<Long, List<UserVO>> userIdUserMap = this.list(userWrapper).stream()
+            .map(user -> BeanUtil.copyProperties(user, UserVO.class))
+            .collect(Collectors.groupingBy(UserVO::getId));
+    List<UserVO> finalUserList=new ArrayList<>();
+    for (Long userId : userIdList) {
+        finalUserList.add(userIdUserMap.get(userId).get(0));
+    }
+    return finalUserList;
+}
+```
+
+检索 => 召回 => 粗排 => 精排 => 重排序等等
+
+检索：尽可能多地查符合要求的数据（比如按记录查）
+
+召回：查询可能要用到的数据（不做运算）
+
+粗排：粗略排序，简单地运算（运算相对轻量）
+
+精排：精细排序，确定固定排位
+
+### 随机匹配前端
+
+1. 选择组件
+
+![image-20230930141546873](assets/image-20230930141546873.png)
+
+2. 引入组件
+
+![image-20230930141610817](assets/image-20230930141610817.png)
+
+3. 修改主页
+
+![image-20230930141738953](assets/image-20230930141738953.png)
+
+![image-20230930141959562](assets/image-20230930141959562.png)
+
+![image-20230930142029568](assets/image-20230930142029568.png)
+
+![image-20230930142221483](assets/image-20230930142221483.png)
+
+### 分表学习建议
+
+mycat、sharding sphere 框架
+
+一致性 hash
+
+
+
+### 队伍操作权限控制
+
+加入队伍： 仅非队伍创建人、且未加入队伍的人可见
+
+更新队伍：仅创建人可见
+
+解散队伍：仅创建人可见
+
+退出队伍：创建人不可见，仅已加入队伍的人可见
+
+
+
+
+
+加载骨架屏特效 ✔
+
+解决：van-skeleton 组件
+
+
+
+仅加入队伍和创建队伍的人能看到队伍操作按钮（listTeam 接口要能获取我加入的队伍状态） ✔
+
+方案 1：前端查询我加入了哪些队伍列表，然后判断每个队伍 id 是否在列表中（前端要多发一次请求）
+
+方案 2：在后端去做上述事情（推荐）
+
+
+
+前端导航栏死【标题】问题 ✔
+
+解决：使用 router.beforeEach，根据要跳转页面的 url 路径 匹配 config/routes 配置的 title 字段。
+
+
+
+## todo 待优化
+
+1、前端：动态展示页面标题、微调格式
+
+2、强制登录，自动跳转到登录页
+
+解决：axios 全局配置响应拦截、并且添加重定向
+
+2、区分公开和加密房间；加入有密码的房间，要指定密码
+
+3、展示已加入队伍人数
+
+4、重复加入队伍的问题（加锁、分布式锁）并发请求时可能出现问题
+
+**分布式锁**
