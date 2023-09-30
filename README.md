@@ -2932,18 +2932,185 @@ mycat、sharding sphere 框架
 
 退出队伍：仅创建人已加入队伍的人可见
 
+![image-20230930171308929](assets/image-20230930171308929.png)
 
-
-1、前端：动态展示页面标题、微调格式
-
-2、强制登录，自动跳转到登录页
+### 强制登录，自动跳转到登录页✔
 
 解决：axios 全局配置响应拦截、并且添加重定向
 
-2、区分公开和加密房间；加入有密码的房间，要指定密码
+![image-20230930175044992](assets/image-20230930175044992.png)
 
-3、展示已加入队伍人数
+![image-20230930175157861](assets/image-20230930175157861.png)
 
-4、重复加入队伍的问题（加锁、分布式锁）并发请求时可能出现问题
+![image-20230930175315930](assets/image-20230930175315930.png)
 
-**分布式锁**
+### 区分公开和加密房间&加入有密码的房间，要指定密码✔
+
+1. 选择组件
+
+![image-20230930190059022](assets/image-20230930190059022.png)
+
+![image-20230930190200201](assets/image-20230930190200201.png)
+
+2. 引入组件
+
+![image-20230930190245632](assets/image-20230930190245632.png)
+
+3. 区分公开和加密
+
+![image-20230930190448572](assets/image-20230930190448572.png)
+
+![image-20230930190520995](assets/image-20230930190520995.png)
+
+![image-20230930190735821](assets/image-20230930190735821.png)
+
+![image-20230930190853797](assets/image-20230930190853797.png)
+
+4. 加入有密码的房间，要指定密码
+
+![image-20230930191259709](assets/image-20230930191259709.png)
+
+![image-20230930191321307](assets/image-20230930191321307.png)
+
+![image-20230930191455572](assets/image-20230930191455572.png)
+
+![image-20230930191527762](assets/image-20230930191527762.png)
+
+### 展示已加入队伍人数✔
+
+1. 后端在service层中的listTeams方法末尾加入这段逻辑，来设置队伍人数
+
+```java
+//查询已加入队伍的所有用户
+userTeamQueryWrapper = new LambdaQueryWrapper<>();
+userTeamQueryWrapper.in(UserTeam::getTeamId, teamIdList);
+List<UserTeam> userTeamList = userTeamService.list(userTeamQueryWrapper);
+// 队伍 id => 加入这个队伍的用户列表
+Map<Long, List<UserTeam>> teamIdUserTeamMap = userTeamList.stream().collect(Collectors.groupingBy(UserTeam::getTeamId));
+//给每个队伍设置队伍人数
+//getOrDefault是map的一个方法，如果这个键teamId的vlaue为null没有队员，就给个空集合
+teamUserVOList.forEach(team -> team.setHasJoinNum(teamIdUserTeamMap.getOrDefault(team.getId(), new ArrayList<>()).size()));
+```
+
+2. 前端
+
+![image-20230930194309992](assets/image-20230930194309992.png)
+
+![image-20230930194330716](assets/image-20230930194330716.png)
+
+### 并发请求重复加入队伍可能出现问题（加锁、分布式锁）✔
+
+```java
+@Override
+@Transactional(rollbackFor = Exception.class)
+public long addTeam(Team team, UserVO loginUser) {
+    //1. 请求参数是否为空？
+    if (team == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "team空值");
+    }
+    // 2. 是否登录，未登录不允许创建
+    if (loginUser == null) {
+        throw new BusinessException(ErrorCode.NO_LOGIN, "未登录");
+    }
+    // 3. 校验信息
+    //    1. 队伍人数 > 1 且 <= 10
+    Integer maxNum = Optional.ofNullable(team.getMaxNum()).orElse(0);
+    if (maxNum <= 1 || maxNum > 10) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍人数不满足要求");
+    }
+    //    2. 队伍标题 <= 20
+    String name = team.getName();
+    if (StringUtils.isBlank(name) || name.length() > 20) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍标题不满足要求");
+    }
+    //    3. 描述 <= 512
+    String description = team.getDescription();
+    if (description.length() > 512) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍描述过长");
+    }
+    //    4. status 是否公开（int）不传默认为 0（公开）
+    Integer status = Optional.ofNullable(team.getStatus()).orElse(0);
+    TeamStatusEnum statusEnum = TeamStatusEnum.getEnumByValue(status);
+    if (statusEnum == null) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍状态不满足要求");
+    }
+    //    5. 如果 status 是加密状态，一定要有密码，且密码 <= 32
+    String password = team.getPassword();
+    if (TeamStatusEnum.SECRET.equals(statusEnum) && (StringUtils.isBlank(password) || password.length() > 32)) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍密码设置不满足要求");
+    }
+    //    6. 超时时间 > 当前时间
+    Date expireTime = team.getExpireTime();
+    if (new Date().after(expireTime)) {
+        throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍已过期");
+    }
+    // 只有一个线程能获取锁
+    RLock lock = redissonClient.getLock(JOINTEAM_DOJOIN_LOCK);
+    //    7. 校验用户最多创建 5 个队伍
+    Long teamId = team.getId();
+    try {
+        while (true){
+            if (lock.tryLock(0,-1, TimeUnit.SECONDS)) {
+                log.info("getLock");
+                LambdaQueryWrapper<Team> queryWrapper = new LambdaQueryWrapper<>();
+                Long userId = loginUser.getId();
+                queryWrapper.eq(Team::getUserId, userId);
+                long hasTeamNum = this.count(queryWrapper);
+                if (hasTeamNum >= 5) {
+                    throw new BusinessException(ErrorCode.PARAMS_ERROR, "单个用户最多创建5个用户");
+                }
+                // 4. 插入队伍信息到队伍表
+                team.setUserId(userId);
+                boolean result = this.save(team);
+                if (!result || teamId == null) {
+                    throw new BusinessException(ErrorCode.SYSTEM_ERROR, "创建队伍失败");
+                }
+                // 5. 插入用户 -队伍关系到关系表
+                UserTeam userTeam = new UserTeam();
+                userTeam.setUserId(userId);
+                userTeam.setTeamId(teamId);
+                userTeam.setJoinTime(new Date());
+                result = userTeamService.save(userTeam);
+                if (!result) {
+                    throw new BusinessException(ErrorCode.SYSTEM_ERROR, "创建用户-队伍失败");
+                }
+            }
+        }
+    } catch (InterruptedException e) {
+        log.error(e.getMessage());
+    } finally {
+        if (lock.isHeldByCurrentThread()){
+            log.info("getLock");
+            lock.unlock();
+        }
+    }
+    return teamId;
+}
+```
+
+## 上线
+
+先区分多环境：前端区分开发和线上接口，后端 prod 改为用线上公网可访问的数据库
+
+前端：Vercel（免费）
+
+https://vercel.com/
+
+后端：微信云托管（部署容器的平台，付费）
+
+https://cloud.weixin.qq.com/cloudrun/service
+
+**（免备案！！！）**
+
+## todo
+
+创建按钮样式
+
+当前加入队伍使用的分布式锁，锁粒度太大，优化：保证互不相干的用户同时加入相同或不同队伍
+
+## 如何改造成小程序？
+
+**cordova、跨端开发框架 taro、uniapp**
+
+
+
