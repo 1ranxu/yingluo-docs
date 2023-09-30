@@ -1166,12 +1166,12 @@ public class TeamQueryRequest extends PageRequest implements Serializable {
 
 ```java
 @GetMapping("/list")
-public Result getTeamList(TeamQueryRequest teamQueryRequest,HttpServletRequest request) {
+public Result getTeamList(TeamQueryRequest teamQueryRequest, HttpServletRequest request) {
     if (teamQueryRequest == null) {
         throw new BusinessException(ErrorCode.SYSTEM_ERROR, "队伍不存在");
     }
     boolean isAdmin = userService.isAdmin(request);
-    List<TeamUserVO> teamList = teamService.listTeams(teamQueryRequest,isAdmin);
+    List<TeamUserVO> teamList = teamService.listTeams(teamQueryRequest, request, isAdmin);
     return Result.success(teamList);
 }
 ```
@@ -1179,28 +1179,33 @@ public Result getTeamList(TeamQueryRequest teamQueryRequest,HttpServletRequest r
 ```java
 /**
  * 搜索队伍
+ *
  * @param teamQueryRequest
+ * @param request
  * @param isAdmin
  * @return
  */
-List<TeamUserVO> listTeams(TeamQueryRequest teamQueryRequest, boolean isAdmin);
+List<TeamUserVO> listTeams(TeamQueryRequest teamQueryRequest, HttpServletRequest request, boolean isAdmin);
 ```
 
 ```java
 @Override
-public List<TeamUserVO> listTeams(TeamQueryRequest teamQueryRequest, boolean isAdmin) {
+public List<TeamUserVO> listTeams(TeamQueryRequest teamQueryRequest, HttpServletRequest request, boolean isAdmin) {
     LambdaQueryWrapper<Team> teamWrapper = new LambdaQueryWrapper<>();
     //组合队伍查询条件
     if (teamQueryRequest != null) {
         //根据队伍id查询
         Long id = teamQueryRequest.getId();
         teamWrapper.eq(id != null && id > 0, Team::getId, id);
+        //根据id列表查询
+        List<Long> ids = teamQueryRequest.getIds();
+        teamWrapper.in(CollectionUtil.isNotEmpty(ids),Team::getId,ids);
         //根据搜索内容查询
         String searchText = teamQueryRequest.getSearchText();
-        teamWrapper.and(qw -> qw
+        teamWrapper
                 .like(StringUtils.isNotBlank(searchText), Team::getName, searchText)
                 .or()
-                .like(StringUtils.isNotBlank(searchText), Team::getDescription, searchText));
+                .like(StringUtils.isNotBlank(searchText), Team::getDescription, searchText);
         //根据队伍名查询
         String teamName = teamQueryRequest.getName();
         teamWrapper.like(StringUtils.isNotBlank(teamName), Team::getName, teamName);
@@ -1222,7 +1227,7 @@ public List<TeamUserVO> listTeams(TeamQueryRequest teamQueryRequest, boolean isA
             statusEnum = TeamStatusEnum.PUBLIC;
         }
         if (!isAdmin && !statusEnum.equals(TeamStatusEnum.PUBLIC)) {
-            throw new BusinessException(ErrorCode.NO_AUTH,"无权限");
+            throw new BusinessException(ErrorCode.NO_AUTH, "无权限");
         }
         teamWrapper.eq(Team::getStatus, statusEnum.getValue());
     }
@@ -1233,37 +1238,38 @@ public List<TeamUserVO> listTeams(TeamQueryRequest teamQueryRequest, boolean isA
     }
     //关联查询用户信息
     List<TeamUserVO> teamUserVOList = new ArrayList<>();
-    //遍历所有队伍
+    // 关联查询创建人的用户信息
     for (Team team : teamList) {
         TeamUserVO teamUserVO = BeanUtil.copyProperties(team, TeamUserVO.class);
-        //根据队伍id到用户-队伍表中查询队伍中有多少队员
-        LambdaQueryWrapper<UserTeam> userTeamWrapper = new LambdaQueryWrapper<>();
-        Long teamId = team.getId();
-        if (teamId == null) {
-            continue;
-        }
-        userTeamWrapper.eq(UserTeam::getTeamId, teamId);
-        List<UserTeam> userTeamList = userTeamService.list(userTeamWrapper);
-        //根据已查到的用户队伍关系记录中的userId查询队伍中的每个用户
-        List<UserVO> userVOList = new ArrayList<>();
-        for (UserTeam userTeam : userTeamList) {
-            LambdaQueryWrapper<User> userWrapper = new LambdaQueryWrapper<>();
-            Long userId = userTeam.getUserId();
-            if (userId == null) {
-                continue;
-            }
-            userWrapper.eq(User::getId, userId);
-            User user = userService.getOne(userWrapper);
-            //查询到地每个用户添加到teamUserVO的UserList中
-            if (user != null) {
-                userVOList.add(BeanUtil.copyProperties(user, UserVO.class));
-            }
-        }
-        //userVOList封装teamUserVO
-        teamUserVO.setUserList(userVOList);
-        //添加队伍信息到teamUserVOList
+        User user = userService.getById(team.getUserId());
+        UserVO userVO = BeanUtil.copyProperties(user, UserVO.class);
+        teamUserVO.setCreateUser(userVO);
         teamUserVOList.add(teamUserVO);
     }
+    //获取所有队伍id
+    final List<Long> teamIdList = teamUserVOList.stream().map(TeamUserVO::getId).collect(Collectors.toList());
+    //判断当前用户是否已加入队伍
+    LambdaQueryWrapper<UserTeam> userTeamQueryWrapper = new LambdaQueryWrapper<>();
+    try {
+        UserVO loginUser = userService.getLoginUser(request);
+        userTeamQueryWrapper.eq(UserTeam::getUserId, loginUser.getId());
+        userTeamQueryWrapper.in(UserTeam::getTeamId, teamIdList);
+        List<UserTeam> userTeamList = userTeamService.list(userTeamQueryWrapper);
+        // 已加入的队伍 id 集合
+        Set<Long> hasJoinTeamIdSet = userTeamList.stream().map(UserTeam::getTeamId).collect(Collectors.toSet());
+        teamUserVOList.forEach(team -> {
+            boolean hasJoin = hasJoinTeamIdSet.contains(team.getId());
+            team.setHasJoin(hasJoin);
+        });
+    } catch (Exception e) {
+    }
+    //查询已加入队伍的人数
+    userTeamQueryWrapper = new LambdaQueryWrapper<>();
+    userTeamQueryWrapper.in(UserTeam::getTeamId, teamIdList);
+    List<UserTeam> userTeamList = userTeamService.list(userTeamQueryWrapper);
+    // 队伍 id => 加入这个队伍的用户列表
+    Map<Long, List<UserTeam>> teamIdUserTeamMap = userTeamList.stream().collect(Collectors.groupingBy(UserTeam::getTeamId));
+    teamUserVOList.forEach(team -> team.setHasJoinNum(teamIdUserTeamMap.getOrDefault(team.getId(), new ArrayList<>()).size()));
     return teamUserVOList;
 }
 ```
@@ -1739,7 +1745,7 @@ public Result getMyJoinTeamList(TeamQueryRequest teamQueryRequest, HttpServletRe
     //设置队伍id列表
     teamQueryRequest.setIds(teamIdList);
     //根据队伍id列表查询当前用户加入的队伍
-    List<TeamUserVO> teamList = teamService.listTeams(teamQueryRequest, true);
+    List<TeamUserVO> teamList = teamService.listTeams(teamQueryRequest,request,true);
     return Result.success(teamList);
 }
 ```
@@ -1765,7 +1771,7 @@ public Result getMyCreateTeamList(TeamQueryRequest teamQueryRequest, HttpServlet
     //设置登录用户id
     teamQueryRequest.setUserId(loginUser.getId());
     //根据登录用户id查询该用户创建的队伍
-    List<TeamUserVO> teamList = teamService.listTeams(teamQueryRequest, true);
+    List<TeamUserVO> teamList = teamService.listTeams(teamQueryRequest,request, true);
     return Result.success(teamList);
 }
 ```
@@ -2884,7 +2890,39 @@ mycat、sharding sphere 框架
 
 
 
-### 队伍操作权限控制
+## 优化
+
+### 加载骨架屏特效 ✔
+
+解决：van-skeleton 组件
+
+1. 选择组件
+
+![image-20230930144636062](assets/image-20230930144636062.png)
+
+2. 引入组件
+
+![image-20230930144702137](assets/image-20230930144702137.png)
+
+3. 修改UserCardList组件
+
+![image-20230930145054310](assets/image-20230930145054310.png)
+
+4. 修改主页
+
+![image-20230930145249504](assets/image-20230930145249504.png)
+
+![image-20230930145403562](assets/image-20230930145403562.png)
+
+### 前端导航栏死【标题】问题 ✔
+
+解决：使用 router.beforeEach，根据要跳转页面的 url 路径 匹配 config/routes 配置的 title 字段。
+
+![image-20230930161750439](assets/image-20230930161750439.png)
+
+![image-20230930161915241](assets/image-20230930161915241.png)
+
+### 队伍操作权限控制✔
 
 加入队伍： 仅非队伍创建人、且未加入队伍的人可见
 
@@ -2892,33 +2930,9 @@ mycat、sharding sphere 框架
 
 解散队伍：仅创建人可见
 
-退出队伍：创建人不可见，仅已加入队伍的人可见
+退出队伍：仅创建人已加入队伍的人可见
 
 
-
-
-
-加载骨架屏特效 ✔
-
-解决：van-skeleton 组件
-
-
-
-仅加入队伍和创建队伍的人能看到队伍操作按钮（listTeam 接口要能获取我加入的队伍状态） ✔
-
-方案 1：前端查询我加入了哪些队伍列表，然后判断每个队伍 id 是否在列表中（前端要多发一次请求）
-
-方案 2：在后端去做上述事情（推荐）
-
-
-
-前端导航栏死【标题】问题 ✔
-
-解决：使用 router.beforeEach，根据要跳转页面的 url 路径 匹配 config/routes 配置的 title 字段。
-
-
-
-## todo 待优化
 
 1、前端：动态展示页面标题、微调格式
 
