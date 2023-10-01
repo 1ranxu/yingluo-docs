@@ -1224,12 +1224,15 @@ public List<TeamUserVO> listTeams(TeamQueryRequest teamQueryRequest, HttpServlet
         Integer status = teamQueryRequest.getStatus();
         TeamStatusEnum statusEnum = TeamStatusEnum.getEnumByValue(status);
         if (statusEnum == null) {
-            statusEnum = TeamStatusEnum.PUBLIC;
+            //如果队伍状态没传，公开加密都可以查
+            teamWrapper.in(Team::getStatus, TeamStatusEnum.PUBLIC.getValue(),TeamStatusEnum.SECRET.getValue());
+        }else {
+            //如果队伍状态传了,就根据队伍状态查
+            teamWrapper.eq(Team::getStatus, statusEnum.getValue());
         }
-        if (!isAdmin && !statusEnum.equals(TeamStatusEnum.PUBLIC)) {
+        if (!isAdmin && statusEnum.equals(TeamStatusEnum.PRIVATE)) {
             throw new BusinessException(ErrorCode.NO_AUTH, "无权限");
         }
-        teamWrapper.eq(Team::getStatus, statusEnum.getValue());
     }
     //查询队伍
     List<Team> teamList = this.list(teamWrapper);
@@ -1263,12 +1266,14 @@ public List<TeamUserVO> listTeams(TeamQueryRequest teamQueryRequest, HttpServlet
         });
     } catch (Exception e) {
     }
-    //查询已加入队伍的人数
+    //查询已加入队伍的所有用户
     userTeamQueryWrapper = new LambdaQueryWrapper<>();
     userTeamQueryWrapper.in(UserTeam::getTeamId, teamIdList);
     List<UserTeam> userTeamList = userTeamService.list(userTeamQueryWrapper);
     // 队伍 id => 加入这个队伍的用户列表
     Map<Long, List<UserTeam>> teamIdUserTeamMap = userTeamList.stream().collect(Collectors.groupingBy(UserTeam::getTeamId));
+    //给每个队伍设置队伍人数
+    //getOrDefault是map的一个方法，如果这个键teamId的vlaue为null没有队员，就给个空集合
     teamUserVOList.forEach(team -> team.setHasJoinNum(teamIdUserTeamMap.getOrDefault(team.getId(), new ArrayList<>()).size()));
     return teamUserVOList;
 }
@@ -3000,6 +3005,10 @@ teamUserVOList.forEach(team -> team.setHasJoinNum(teamIdUserTeamMap.getOrDefault
 
 ### 并发请求重复加入队伍可能出现问题（加锁、分布式锁）✔
 
+使用Redisson的分布式锁，锁是teamId
+
+相同的用户线程并发请求加入相同的队伍时，同时只有一个用户线程能够拿到锁、加入不相同的队伍时，并行执行；不同用户线程，加入相同队伍时，只有一个用户线程能拿到锁，加入不同队伍时，不同用户线程能够并行执行
+
 ```java
 @Override
 @Transactional(rollbackFor = Exception.class)
@@ -3044,10 +3053,10 @@ public long addTeam(Team team, UserVO loginUser) {
     if (new Date().after(expireTime)) {
         throw new BusinessException(ErrorCode.PARAMS_ERROR, "队伍已过期");
     }
-    // 只有一个线程能获取锁
-    RLock lock = redissonClient.getLock(JOINTEAM_DOJOIN_LOCK);
-    //    7. 校验用户最多创建 5 个队伍
     Long teamId = team.getId();
+    // 只有一个线程能获取锁
+    RLock lock = redissonClient.getLock(JOINTEAM_DOJOIN_LOCK+":"+teamId);
+    //    7. 校验用户最多创建 5 个队伍
     try {
         while (true){
             if (lock.tryLock(0,-1, TimeUnit.SECONDS)) {
@@ -3090,27 +3099,115 @@ public long addTeam(Team team, UserVO loginUser) {
 
 ## 上线
 
-先区分多环境：前端区分开发和线上接口，后端 prod 改为用线上公网可访问的数据库
+区分多环境：前端区分开发和线上接口，后端 prod 改为用线上公网可访问的数据库
+
+### 前端
+
+![image-20231001164544429](assets/image-20231001164544429.png)
 
 前端：Vercel（免费）
 
 https://vercel.com/
 
-后端：微信云托管（部署容器的平台，付费）
+1.  打包
+
+![image-20231001145908035](assets/image-20231001145908035.png)
+
+2. 进入打包好的目录，使用serve命令运行
+
+```sh
+#没有serve,安装
+npm i -g serve
+```
+
+![image-20231001150219848](assets/image-20231001150219848.png)
+
+3. 使用Vercel部署项目
+
+```sh
+#安装vercel，以管理员身份打开命令提示符
+npm i -g vercel
+```
+
+![image-20231001152901451](assets/image-20231001152901451.png)
+
+4. 注册https://vercel.com/
+
+5. 登录 
+
+![image-20231001154018478](assets/image-20231001154018478.png)
+
+6. 部署
+
+```
+vercel --prod
+```
+
+![image-20231001154424703](assets/image-20231001154424703.png)
+
+![image-20231001154605927](assets/image-20231001154605927.png)
+
+![image-20231001164724302](assets/image-20231001164724302.png)
+
+![image-20231001164755245](assets/image-20231001164755245.png)
+
+![image-20231001154746030](assets/image-20231001154746030.png)
+
+### 后端：微信云托管（部署容器的平台，付费）
 
 https://cloud.weixin.qq.com/cloudrun/service
 
+1. 注册公众号
+2. 新建服务
+
+![image-20231001161303850](assets/image-20231001161303850.png)
+
+![image-20231001161421174](assets/image-20231001161421174.png)
+
+![image-20231001161504823](assets/image-20231001161504823.png)
+
+3. 编写DockerFile
+
+```dockerfile
+#指定基础镜像
+FROM maven:3.5-jdk-8-alpine as builder
+#指定镜像的工作目录
+WORKDIR /app
+#把需要的本地文件复制到容器镜像/app工作目录中
+COPY pom.xml .
+COPY src ./src
+#用RUN执行maven的打包命令,至此镜像制作完成
+RUN mvn package -DskipTests
+#之后使用该镜像运行容器时,会自动执行以下命令,启动
+CMD ["java","-jar","/app/target/userCenter-backend-0.0.1-SNAPSHOT.jar","--spring.profiles.active=prod"]
+```
+
+![image-20231001162429133](assets/image-20231001162429133.png)
+
+4. 把后端项目打成压缩包
+
+![image-20231001162148886](assets/image-20231001162148886.png)
+
+5. 上传以及设置
+
+![image-20231001162601817](assets/image-20231001162601817.png)
+
+![image-20231001162622691](assets/image-20231001162622691.png)
+
+![image-20231001174605474](assets/image-20231001174605474.png)
+
 **（免备案！！！）**
+
+这个项目需要redis，微信云托管上没有redis所以发布会失败
 
 ## todo
 
-创建按钮样式
+队伍过期倒计时
 
-当前加入队伍使用的分布式锁，锁粒度太大，优化：保证互不相干的用户同时加入相同或不同队伍
+队伍分享
 
 ## 如何改造成小程序？
 
 **cordova、跨端开发框架 taro、uniapp**
-
 
 
